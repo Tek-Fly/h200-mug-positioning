@@ -256,24 +256,24 @@ async def main():
                     sys.exit(1)
         
         # Print summary
-        print("\n=== Deployment Summary ===")
+        logger.info("\n=== Deployment Summary ===")
         for mode, deployment_id in deployments:
-            print(f"{mode.capitalize()}: {deployment_id}")
+            logger.info(f"{mode.capitalize()}: {deployment_id}")
             
             # Get deployment info
             state = await manager.get_deployment(deployment_id)
             if state:
                 metrics = state.metrics
                 if mode == "serverless" and "endpoint_url" in metrics:
-                    print(f"  Endpoint URL: {metrics['endpoint_url']}")
+                    logger.info(f"  Endpoint URL: {metrics['endpoint_url']}")
                 elif mode == "timed" and "pod_ip" in metrics:
-                    print(f"  Pod IP: {metrics['pod_ip']}")
+                    logger.info(f"  Pod IP: {metrics['pod_ip']}")
                 
                 # Get cost estimate
                 costs = await manager.get_deployment_costs(deployment_id)
-                print(f"  Estimated hourly cost: ${costs['breakdown']['hourly_rate']:.2f}")
+                logger.info(f"  Estimated hourly cost: ${costs['breakdown']['hourly_rate']:.2f}")
         
-        print("\nDeployment completed successfully!")
+        logger.info("\nDeployment completed successfully!")
         
     finally:
         await manager.shutdown()

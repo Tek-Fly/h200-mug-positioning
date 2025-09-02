@@ -187,6 +187,7 @@ import ActivityFeed from '@/components/dashboard/ActivityFeed.vue'
 import { useDashboardStore } from '@/stores/dashboard'
 import { useWebSocket } from '@/api/websocket'
 import type { ServiceStatus } from '@/types/api'
+import { logError } from '@/utils/logger'
 
 const dashboardStore = useDashboardStore()
 const { connect: connectWs, isConnected } = useWebSocket()
@@ -272,7 +273,7 @@ onMounted(async () => {
     }
     dashboardStore.startRealtimeUpdates()
   } catch (error) {
-    console.error('Failed to setup real-time updates:', error)
+    logError('Failed to setup real-time updates', error, 'Dashboard')
   }
   
   // Start auto-refresh

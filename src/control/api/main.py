@@ -1,10 +1,12 @@
 """Main FastAPI application for the H200 Intelligent Mug Positioning System."""
 
+# Standard library imports
 import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any, Dict
 
+# Third-party imports
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,12 +15,17 @@ from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 from starlette.exceptions import HTTPException
 
-from src.control.api.routers import analysis, dashboard, rules, servers, websocket
+# First-party imports
+from src.control.api.config import get_settings
 from src.control.api.middleware.auth import AuthMiddleware
 from src.control.api.middleware.logging import LoggingMiddleware
 from src.control.api.middleware.rate_limit import RateLimitMiddleware
-from src.control.api.config import get_settings
-from src.control.manager.integration import init_orchestrator, shutdown_orchestrator, get_orchestrator
+from src.control.api.routers import analysis, dashboard, rules, servers, websocket
+from src.control.manager.integration import (
+    get_orchestrator,
+    init_orchestrator,
+    shutdown_orchestrator,
+)
 from src.core.models.manager import ModelManager
 from src.database.get_db import get_mongodb, get_redis
 from src.utils.logging_config import setup_logging
@@ -33,48 +40,48 @@ async def lifespan(app: FastAPI):
     """Application lifespan events."""
     # Startup
     logger.info("Starting H200 API server...")
-    
+
     try:
         # Initialize database connections
         app.state.mongodb = await get_mongodb()
         app.state.redis = await get_redis()
-        
+
         # Initialize model manager
         app.state.model_manager = ModelManager()
         await app.state.model_manager.initialize()
-        
+
         # Initialize control plane orchestrator
         app.state.orchestrator = await init_orchestrator(
             runpod_api_key=settings.runpod_api_key,
             idle_timeout_seconds=settings.idle_timeout_seconds,
             enable_auto_shutdown=settings.enable_auto_shutdown,
         )
-        
+
         # Store settings in app state
         app.state.settings = settings
-        
+
         logger.info("All services initialized successfully")
-        
+
         yield
-        
+
     finally:
         # Shutdown
         logger.info("Shutting down H200 API server...")
-        
+
         # Shutdown orchestrator
         await shutdown_orchestrator()
-        
+
         # Cleanup model manager
         if hasattr(app.state, "model_manager"):
             await app.state.model_manager.cleanup()
-        
+
         # Close database connections
         if hasattr(app.state, "mongodb"):
             app.state.mongodb.close()
-        
+
         if hasattr(app.state, "redis"):
             await app.state.redis.close()
-        
+
         logger.info("Shutdown complete")
 
 
@@ -107,47 +114,58 @@ if settings.allowed_hosts:
     )
 
 # Add custom middleware
-app.add_middleware(RateLimitMiddleware, calls=settings.rate_limit_calls, period=settings.rate_limit_period)
+app.add_middleware(
+    RateLimitMiddleware,
+    calls=settings.rate_limit_calls,
+    period=settings.rate_limit_period,
+)
 app.add_middleware(LoggingMiddleware)
-app.add_middleware(AuthMiddleware, public_paths=["/api/health", "/api/docs", "/api/redoc", "/api/openapi.json"])
+app.add_middleware(
+    AuthMiddleware,
+    public_paths=["/api/health", "/api/docs", "/api/redoc", "/api/openapi.json"],
+)
+
 
 # Add request tracking middleware for control plane
 @app.middleware("http")
 async def track_requests(request: Request, call_next):
     """Track requests for auto-shutdown and metrics."""
+    # Standard library imports
     import time
+
     start_time = time.time()
-    
+
     # Store start time for later use
     request.state.start_time = start_time
-    
+
     # Process request
     response = await call_next(request)
-    
+
     # Calculate processing time
     request.state.end_time = time.time()
-    
+
     # Track in orchestrator if available
     if hasattr(request.app.state, "orchestrator"):
         orchestrator = request.app.state.orchestrator
-        
+
         # Track activity for auto-shutdown
         if request.url.path.startswith("/api/v1/analyze"):
             server_id = request.headers.get("X-Server-ID", "default")
             orchestrator.auto_shutdown.record_activity(server_id)
-        
+
         # Record metrics
         latency_ms = (request.state.end_time - request.state.start_time) * 1000
         server_id = request.headers.get("X-Server-ID", "default")
-        
+
         orchestrator.record_request(
             server_id=server_id,
             latency_ms=latency_ms,
             success=response.status_code < 400,
             endpoint=str(request.url.path),
         )
-    
+
     return response
+
 
 # Add Prometheus instrumentation
 instrumentator = Instrumentator()
@@ -171,7 +189,9 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     """Handle validation errors."""
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -215,7 +235,7 @@ async def health_check() -> Dict[str, Any]:
             "models": False,
         },
     }
-    
+
     try:
         # Check MongoDB
         if hasattr(app.state, "mongodb"):
@@ -223,7 +243,7 @@ async def health_check() -> Dict[str, Any]:
             health_status["services"]["mongodb"] = True
     except Exception as e:
         logger.error(f"MongoDB health check failed: {e}")
-    
+
     try:
         # Check Redis
         if hasattr(app.state, "redis"):
@@ -231,35 +251,40 @@ async def health_check() -> Dict[str, Any]:
             health_status["services"]["redis"] = True
     except Exception as e:
         logger.error(f"Redis health check failed: {e}")
-    
+
     try:
         # Check models
-        if hasattr(app.state, "model_manager") and app.state.model_manager.is_initialized:
+        if (
+            hasattr(app.state, "model_manager")
+            and app.state.model_manager.is_initialized
+        ):
             health_status["services"]["models"] = True
     except Exception as e:
         logger.error(f"Model health check failed: {e}")
-    
+
     try:
         # Check orchestrator
         if hasattr(app.state, "orchestrator") and app.state.orchestrator.is_running:
             health_status["services"]["orchestrator"] = True
-            
+
             # Add orchestrator details
             orchestrator = app.state.orchestrator
             health_status["orchestrator"] = {
                 "servers": len(await orchestrator.server_manager.list_servers()),
                 "auto_shutdown": orchestrator.enable_auto_shutdown,
-                "notifications": orchestrator.notifier.get_statistics()["connected_clients"],
+                "notifications": orchestrator.notifier.get_statistics()[
+                    "connected_clients"
+                ],
             }
     except Exception as e:
         logger.error(f"Orchestrator health check failed: {e}")
         health_status["services"]["orchestrator"] = False
-    
+
     # Determine overall health
     all_healthy = all(health_status["services"].values())
     if not all_healthy:
         health_status["status"] = "degraded"
-    
+
     return health_status
 
 
@@ -283,8 +308,9 @@ async def root() -> Dict[str, str]:
 
 
 if __name__ == "__main__":
+    # Third-party imports
     import uvicorn
-    
+
     uvicorn.run(
         "src.control.api.main:app",
         host="0.0.0.0",

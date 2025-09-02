@@ -1,25 +1,28 @@
 """Dashboard API endpoints."""
 
+# Standard library imports
 import logging
 import os
-import psutil
 from datetime import datetime, timedelta
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
+# Third-party imports
+import psutil
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+# First-party imports
 from src.control.api.middleware.auth import get_current_user
 from src.control.api.models.dashboard import (
+    ActivityLog,
+    CostMetrics,
     DashboardRequest,
     DashboardResponse,
+    MetricType,
     PerformanceMetrics,
     ResourceUsage,
     ServiceHealth,
     ServiceStatus,
     SystemMetric,
-    MetricType,
-    CostMetrics,
-    ActivityLog,
 )
 from src.control.manager.orchestrator import ControlPlaneOrchestrator
 
@@ -30,7 +33,7 @@ router = APIRouter()
 async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
     """Check health of all services."""
     services = {}
-    
+
     # MongoDB health
     mongodb_health = ServiceHealth(
         name="MongoDB",
@@ -38,12 +41,12 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
         last_check=datetime.utcnow(),
         details={},
     )
-    
+
     try:
         if hasattr(request.app.state, "mongodb"):
             await request.app.state.mongodb.admin.command("ping")
             mongodb_health.status = ServiceStatus.HEALTHY
-            
+
             # Get connection info
             server_info = await request.app.state.mongodb.server_info()
             mongodb_health.details = {
@@ -54,9 +57,9 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
     except Exception as e:
         mongodb_health.status = ServiceStatus.UNHEALTHY
         mongodb_health.details["error"] = str(e)
-    
+
     services["mongodb"] = mongodb_health
-    
+
     # Redis health
     redis_health = ServiceHealth(
         name="Redis",
@@ -64,12 +67,12 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
         last_check=datetime.utcnow(),
         details={},
     )
-    
+
     try:
         if hasattr(request.app.state, "redis"):
             await request.app.state.redis.ping()
             redis_health.status = ServiceStatus.HEALTHY
-            
+
             # Get Redis info
             info = await request.app.state.redis.info()
             redis_health.details = {
@@ -81,9 +84,9 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
     except Exception as e:
         redis_health.status = ServiceStatus.UNHEALTHY
         redis_health.details["error"] = str(e)
-    
+
     services["redis"] = redis_health
-    
+
     # Model service health
     model_health = ServiceHealth(
         name="ML Models",
@@ -91,7 +94,7 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
         last_check=datetime.utcnow(),
         details={},
     )
-    
+
     try:
         if hasattr(request.app.state, "model_manager"):
             if request.app.state.model_manager.is_initialized:
@@ -106,9 +109,9 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
     except Exception as e:
         model_health.status = ServiceStatus.UNHEALTHY
         model_health.details["error"] = str(e)
-    
+
     services["models"] = model_health
-    
+
     # Control plane health
     control_health = ServiceHealth(
         name="Control Plane",
@@ -116,7 +119,7 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
         last_check=datetime.utcnow(),
         details={},
     )
-    
+
     try:
         if hasattr(request.app.state, "orchestrator"):
             orchestrator = request.app.state.orchestrator
@@ -125,17 +128,21 @@ async def get_service_health(request: Request) -> Dict[str, ServiceHealth]:
                 control_health.details = {
                     "servers": len(await orchestrator.server_manager.list_servers()),
                     "auto_shutdown_enabled": orchestrator.enable_auto_shutdown,
-                    "active_notifications": orchestrator.notifier.get_statistics()["connected_clients"],
+                    "active_notifications": orchestrator.notifier.get_statistics()[
+                        "connected_clients"
+                    ],
                 }
             else:
                 control_health.status = ServiceStatus.DEGRADED
-                control_health.details["message"] = "Control plane not fully operational"
+                control_health.details["message"] = (
+                    "Control plane not fully operational"
+                )
     except Exception as e:
         control_health.status = ServiceStatus.UNHEALTHY
         control_health.details["error"] = str(e)
-    
+
     services["control_plane"] = control_health
-    
+
     return services
 
 
@@ -143,7 +150,7 @@ async def get_performance_metrics(request: Request) -> PerformanceMetrics:
     """Get system performance metrics."""
     # These would typically come from Prometheus or similar monitoring system
     # For now, returning placeholder values
-    
+
     metrics = PerformanceMetrics(
         cold_start_ms=1500.0,  # FlashBoot cold start
         warm_start_ms=50.0,
@@ -153,7 +160,7 @@ async def get_performance_metrics(request: Request) -> PerformanceMetrics:
         cache_hit_rate=0.0,
         requests_per_second=0.0,
     )
-    
+
     # Try to get cache hit rate from Redis
     try:
         if hasattr(request.app.state, "redis"):
@@ -165,7 +172,7 @@ async def get_performance_metrics(request: Request) -> PerformanceMetrics:
                 metrics.cache_hit_rate = (hits / total) * 100
     except Exception as e:
         logger.error(f"Error getting cache stats: {e}")
-    
+
     return metrics
 
 
@@ -175,7 +182,7 @@ async def get_resource_usage() -> ResourceUsage:
     cpu_percent = psutil.cpu_percent(interval=0.1)
     memory = psutil.virtual_memory()
     disk = psutil.disk_usage("/")
-    
+
     usage = ResourceUsage(
         cpu_percent=cpu_percent,
         memory_used_mb=memory.used / 1024 / 1024,
@@ -183,10 +190,12 @@ async def get_resource_usage() -> ResourceUsage:
         disk_used_gb=disk.used / 1024 / 1024 / 1024,
         disk_total_gb=disk.total / 1024 / 1024 / 1024,
     )
-    
+
     # Try to get GPU stats (requires nvidia-ml-py)
     try:
+        # Third-party imports
         import pynvml
+
         pynvml.nvmlInit()
         device_count = pynvml.nvmlDeviceGetCount()
         if device_count > 0:
@@ -197,30 +206,30 @@ async def get_resource_usage() -> ResourceUsage:
     except Exception:
         # GPU stats not available
         pass
-    
+
     return usage
 
 
 async def get_cost_metrics() -> CostMetrics:
     """Calculate cost metrics."""
     # These are example calculations - adjust based on actual pricing
-    
+
     # H200 GPU pricing (example: $3.50/hour)
     gpu_hourly_rate = 3.50
-    
+
     # Storage pricing (example: $0.023/GB/month)
     storage_gb_monthly = 0.023
-    
+
     # Network pricing (example: $0.09/GB egress)
     network_gb_rate = 0.09
-    
+
     # Calculate daily costs
     compute_cost = gpu_hourly_rate * 24  # Assuming 24/7 operation
     storage_cost = (100 * storage_gb_monthly) / 30  # Assuming 100GB storage
     network_cost = 10 * network_gb_rate  # Assuming 10GB daily transfer
-    
+
     total_cost = compute_cost + storage_cost + network_cost
-    
+
     return CostMetrics(
         period="daily",
         compute_cost=compute_cost,
@@ -242,15 +251,24 @@ async def get_recent_activity(
 ) -> list[ActivityLog]:
     """Get recent system activity."""
     activities = []
-    
+
     try:
         if hasattr(request.app.state, "mongodb"):
             # Get recent analysis requests
-            cursor = request.app.state.mongodb.analysis_results.find(
-                {},
-                {"request_id": 1, "user_id": 1, "timestamp": 1, "processing_time_ms": 1}
-            ).sort("timestamp", -1).limit(limit)
-            
+            cursor = (
+                request.app.state.mongodb.analysis_results.find(
+                    {},
+                    {
+                        "request_id": 1,
+                        "user_id": 1,
+                        "timestamp": 1,
+                        "processing_time_ms": 1,
+                    },
+                )
+                .sort("timestamp", -1)
+                .limit(limit)
+            )
+
             async for doc in cursor:
                 activity = ActivityLog(
                     timestamp=doc["timestamp"],
@@ -263,10 +281,10 @@ async def get_recent_activity(
                     duration_ms=doc.get("processing_time_ms"),
                 )
                 activities.append(activity)
-    
+
     except Exception as e:
         logger.error(f"Error getting activity logs: {e}")
-    
+
     return activities
 
 
@@ -296,13 +314,13 @@ async def get_dashboard(
     - Recent activity
     """
     response = DashboardResponse(timestamp=datetime.utcnow())
-    
+
     try:
         # Service health
         if include_health:
             services = await get_service_health(request)
             response.services = list(services.values())
-            
+
             # Determine overall health
             statuses = [s.status for s in services.values()]
             if all(s == ServiceStatus.HEALTHY for s in statuses):
@@ -311,11 +329,11 @@ async def get_dashboard(
                 response.overall_health = ServiceStatus.UNHEALTHY
             else:
                 response.overall_health = ServiceStatus.DEGRADED
-        
+
         # Performance metrics
         if include_metrics:
             response.performance = await get_performance_metrics(request)
-            
+
             # Add additional system metrics
             response.metrics = [
                 SystemMetric(
@@ -331,19 +349,21 @@ async def get_dashboard(
                     timestamp=datetime.utcnow(),
                 ),
             ]
-        
+
         # Resource usage
         if include_resources:
             response.resources = await get_resource_usage()
-        
+
         # Cost metrics
         if include_costs:
             response.costs = await get_cost_metrics()
-        
+
         # Recent activity
         if include_activity:
-            response.recent_activity = await get_recent_activity(request, activity_limit)
-        
+            response.recent_activity = await get_recent_activity(
+                request, activity_limit
+            )
+
         # Summary statistics
         response.summary = {
             "total_requests_today": 12345,
@@ -351,50 +371,72 @@ async def get_dashboard(
             "error_rate_percent": 0.5,
             "active_users": 42,
         }
-        
+
         # Add control plane data if available
         if orchestrator and include_metrics:
             try:
                 # Get comprehensive dashboard data from orchestrator
                 control_data = await orchestrator.get_dashboard_data()
-                
+
                 # Update response with real data
                 if "metrics" in control_data:
                     metrics_data = control_data["metrics"]
-                    
+
                     # Update performance metrics with real data
                     if "request" in metrics_data:
-                        response.performance.api_latency_p95_ms = metrics_data["request"].get("average_latency", {}).get("p95", 180.0)
-                        response.performance.requests_per_second = metrics_data["requests"].get("total_requests", 0) / 3600  # Convert to RPS
-                    
+                        response.performance.api_latency_p95_ms = (
+                            metrics_data["request"]
+                            .get("average_latency", {})
+                            .get("p95", 180.0)
+                        )
+                        response.performance.requests_per_second = (
+                            metrics_data["requests"].get("total_requests", 0) / 3600
+                        )  # Convert to RPS
+
                     if "gpu" in metrics_data:
-                        response.performance.gpu_utilization_percent = metrics_data["gpu"].get("gpu_utilization", {}).get("avg", 0.0)
-                    
+                        response.performance.gpu_utilization_percent = (
+                            metrics_data["gpu"]
+                            .get("gpu_utilization", {})
+                            .get("avg", 0.0)
+                        )
+
                     if "model" in metrics_data:
-                        response.performance.cache_hit_rate = metrics_data["model"].get("cache_hit_rate", {}).get("avg", 0.0)
-                
+                        response.performance.cache_hit_rate = (
+                            metrics_data["model"]
+                            .get("cache_hit_rate", {})
+                            .get("avg", 0.0)
+                        )
+
                 # Update costs with real data
                 if "costs" in control_data and include_costs:
                     cost_data = control_data["costs"]
-                    response.costs.total_cost = cost_data.get("total", response.costs.total_cost)
+                    response.costs.total_cost = cost_data.get(
+                        "total", response.costs.total_cost
+                    )
                     response.costs.breakdown["servers"] = cost_data.get("by_server", {})
-                
+
                 # Add server status to summary
                 if "servers" in control_data:
-                    response.summary["active_servers"] = len([s for s in control_data["servers"] if s["state"] == "running"])
+                    response.summary["active_servers"] = len(
+                        [s for s in control_data["servers"] if s["state"] == "running"]
+                    )
                     response.summary["total_servers"] = len(control_data["servers"])
-                
+
                 # Add auto-shutdown stats
                 if "auto_shutdown" in control_data:
                     shutdown_stats = control_data["auto_shutdown"]
-                    response.summary["auto_shutdowns_today"] = shutdown_stats.get("total_shutdowns", 0)
-                    response.summary["cost_savings_today"] = shutdown_stats.get("total_savings", 0.0)
-                
+                    response.summary["auto_shutdowns_today"] = shutdown_stats.get(
+                        "total_shutdowns", 0
+                    )
+                    response.summary["cost_savings_today"] = shutdown_stats.get(
+                        "total_savings", 0.0
+                    )
+
             except Exception as e:
                 logger.error(f"Error getting control plane data: {e}")
-        
+
         return response
-        
+
     except Exception as e:
         logger.error(f"Error getting dashboard data: {e}", exc_info=True)
         raise HTTPException(
@@ -413,7 +455,7 @@ async def get_metric_history(
     """Get historical data for a specific metric."""
     # This would typically query a time-series database
     # For now, returning placeholder data
-    
+
     return {
         "metric": metric_name,
         "time_range": time_range,

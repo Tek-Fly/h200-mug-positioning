@@ -1,5 +1,6 @@
 """Control plane manager components for H200 system."""
 
+# First-party imports
 from src.control.manager.auto_shutdown import AutoShutdownScheduler
 from src.control.manager.metrics import MetricsCollector
 from src.control.manager.notifier import WebSocketNotifier

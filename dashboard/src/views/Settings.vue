@@ -254,6 +254,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useNotificationStore } from '@/stores/notifications'
 import type { Theme } from '@/stores/theme'
+import { logError } from '@/utils/logger'
 
 const themeStore = useThemeStore()
 const notificationStore = useNotificationStore()
@@ -364,7 +365,7 @@ if (savedSettings) {
     const parsed = JSON.parse(savedSettings)
     Object.assign(settings, parsed)
   } catch (error) {
-    console.error('Failed to load saved settings:', error)
+    logError('Failed to load saved settings', error, 'Settings')
   }
 }
 </script>

@@ -1,10 +1,12 @@
 """Control plane orchestrator that coordinates all manager components."""
 
+# Standard library imports
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
+# First-party imports
 from src.control.api.models.servers import (
     ServerConfig,
     ServerInfo,
@@ -25,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 class ControlPlaneOrchestrator:
     """Orchestrates all control plane components."""
-    
+
     def __init__(
         self,
         runpod_api_key: Optional[str] = None,
@@ -39,7 +41,7 @@ class ControlPlaneOrchestrator:
         self.metrics_collector = MetricsCollector(retention_hours=24)
         self.status_tracker = StatusTracker(health_check_interval=30)
         self.notifier = WebSocketNotifier(batch_interval=0.1)
-        
+
         # Auto-shutdown scheduler
         self.auto_shutdown = AutoShutdownScheduler(
             server_manager=self.server_manager,
@@ -47,25 +49,26 @@ class ControlPlaneOrchestrator:
             check_interval_seconds=30,
         )
         self.enable_auto_shutdown = enable_auto_shutdown
-        
+
         # Database clients
         self.mongodb = None
         self.redis = None
-        
+
         # State
         self.is_running = False
         self._background_tasks: List[asyncio.Task] = []
-        
+
         # Wire up callbacks
         self._setup_callbacks()
-    
+
     def _setup_callbacks(self):
         """Set up component callbacks."""
+
         # Resource monitor -> Metrics collector
         async def resource_callback(gpus, system):
             self.metrics_collector.record_gpu_metrics(gpus)
             self.metrics_collector.record_system_metrics(system)
-            
+
             # Check for alerts
             alerts = await self.resource_monitor.check_resource_alerts()
             for alert in alerts:
@@ -75,17 +78,19 @@ class ControlPlaneOrchestrator:
                     message=alert["message"],
                     metadata=alert,
                 )
-        
+
         self.resource_monitor.add_callback(resource_callback)
-        
+
         # Auto-shutdown -> Notifier
         async def shutdown_callback(event):
             await self.notifier.notify_activity(
                 activity_type=event["event"],
-                description=event.get("message", f"Auto-shutdown event: {event['event']}"),
+                description=event.get(
+                    "message", f"Auto-shutdown event: {event['event']}"
+                ),
                 metadata=event,
             )
-            
+
             # Update status tracker
             if "server_id" in event:
                 if event["event"] == "auto_shutdown":
@@ -93,9 +98,9 @@ class ControlPlaneOrchestrator:
                         event["server_id"],
                         ServerState.STOPPED,
                     )
-        
+
         self.auto_shutdown.add_shutdown_callback(shutdown_callback)
-        
+
         # Status tracker -> Notifier
         async def status_callback(event):
             if event["event"] == "alert":
@@ -111,53 +116,53 @@ class ControlPlaneOrchestrator:
                     description=f"Server {event['server_id']} {event['event']}",
                     metadata=event,
                 )
-        
+
         self.status_tracker.add_callback(status_callback)
-    
+
     async def start(self):
         """Start all control plane components."""
         if self.is_running:
             return
-        
+
         logger.info("Starting control plane orchestrator")
-        
+
         try:
             # Initialize database connections
             self.mongodb = await get_database()
             self.redis = await get_redis_client()
-            
+
             # Initialize and start components
             await self.server_manager.initialize()
             await self.resource_monitor.start()
             await self.metrics_collector.start()
             await self.status_tracker.start()
             await self.notifier.start()
-            
+
             if self.enable_auto_shutdown:
                 await self.auto_shutdown.start()
-            
+
             # Start background tasks
             self._background_tasks = [
                 asyncio.create_task(self._metrics_broadcast_loop()),
                 asyncio.create_task(self._status_update_loop()),
                 asyncio.create_task(self._cost_tracking_loop()),
             ]
-            
+
             self.is_running = True
             logger.info("Control plane orchestrator started successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to start orchestrator: {e}")
             await self.stop()
             raise
-    
+
     async def stop(self):
         """Stop all control plane components."""
         if not self.is_running:
             return
-        
+
         logger.info("Stopping control plane orchestrator")
-        
+
         # Cancel background tasks
         for task in self._background_tasks:
             task.cancel()
@@ -165,24 +170,24 @@ class ControlPlaneOrchestrator:
                 await task
             except asyncio.CancelledError:
                 pass
-        
+
         # Stop components
         if self.enable_auto_shutdown:
             await self.auto_shutdown.stop()
-        
+
         await self.notifier.stop()
         await self.status_tracker.stop()
         await self.metrics_collector.stop()
         await self.resource_monitor.stop()
         await self.server_manager.shutdown()
-        
+
         # Close database connections
         if self.redis:
             await self.redis.close()
-        
+
         self.is_running = False
         logger.info("Control plane orchestrator stopped")
-    
+
     async def deploy_server(
         self,
         server_type: ServerType,
@@ -192,7 +197,7 @@ class ControlPlaneOrchestrator:
     ) -> ServerInfo:
         """Deploy a new server with full tracking."""
         logger.info(f"Deploying {server_type} server")
-        
+
         try:
             # Deploy server
             server = await self.server_manager.deploy_server(
@@ -200,7 +205,7 @@ class ControlPlaneOrchestrator:
                 config=config,
                 tags=tags,
             )
-            
+
             # Track deployment
             deployment_id = f"deploy-{datetime.utcnow().timestamp()}"
             self.status_tracker.track_deployment(
@@ -209,11 +214,11 @@ class ControlPlaneOrchestrator:
                 server_type=server_type,
                 server_state=server.state,
             )
-            
+
             # Start if requested
             if auto_start and server.state == ServerState.STOPPED:
                 server = await self.start_server(server.id)
-            
+
             # Log deployment
             await self.notifier.notify_activity(
                 activity_type="server_deployed",
@@ -224,20 +229,22 @@ class ControlPlaneOrchestrator:
                     "config": config.model_dump(),
                 },
             )
-            
+
             # Store in MongoDB
             if self.mongodb:
-                await self.mongodb.deployments.insert_one({
-                    "deployment_id": deployment_id,
-                    "server_id": server.id,
-                    "server_type": server_type.value,
-                    "config": config.model_dump(),
-                    "created_at": datetime.utcnow(),
-                    "tags": tags or {},
-                })
-            
+                await self.mongodb.deployments.insert_one(
+                    {
+                        "deployment_id": deployment_id,
+                        "server_id": server.id,
+                        "server_type": server_type.value,
+                        "config": config.model_dump(),
+                        "created_at": datetime.utcnow(),
+                        "tags": tags or {},
+                    }
+                )
+
             return server
-            
+
         except Exception as e:
             logger.error(f"Failed to deploy server: {e}")
             await self.notifier.notify_alert(
@@ -246,21 +253,21 @@ class ControlPlaneOrchestrator:
                 message=f"Failed to deploy {server_type} server: {str(e)}",
             )
             raise
-    
+
     async def start_server(self, server_id: str) -> ServerInfo:
         """Start a server with tracking."""
         logger.info(f"Starting server {server_id}")
-        
+
         try:
             # Start server
             server = await self.server_manager.start_server(server_id)
-            
+
             # Update status
             self.status_tracker.update_server_state(server_id, ServerState.RUNNING)
-            
+
             # Record activity
             self.auto_shutdown.record_activity(server_id)
-            
+
             # Notify
             await self.notifier.notify_server_event(
                 server_id=server_id,
@@ -270,25 +277,25 @@ class ControlPlaneOrchestrator:
                     "endpoint_url": server.endpoint_url,
                 },
             )
-            
+
             return server
-            
+
         except Exception as e:
             logger.error(f"Failed to start server {server_id}: {e}")
             self.status_tracker.update_server_state(server_id, ServerState.ERROR)
             raise
-    
+
     async def stop_server(self, server_id: str, force: bool = False) -> ServerInfo:
         """Stop a server with tracking."""
         logger.info(f"Stopping server {server_id} (force={force})")
-        
+
         try:
             # Stop server
             server = await self.server_manager.stop_server(server_id, force)
-            
+
             # Update status
             self.status_tracker.update_server_state(server_id, ServerState.STOPPED)
-            
+
             # Notify
             await self.notifier.notify_server_event(
                 server_id=server_id,
@@ -298,23 +305,23 @@ class ControlPlaneOrchestrator:
                     "forced": force,
                 },
             )
-            
+
             return server
-            
+
         except Exception as e:
             logger.error(f"Failed to stop server {server_id}: {e}")
             if not force:
                 raise
             return await self.server_manager.get_server_status(server_id)
-    
+
     async def restart_server(self, server_id: str) -> ServerInfo:
         """Restart a server."""
         logger.info(f"Restarting server {server_id}")
-        
+
         server = await self.stop_server(server_id)
         await asyncio.sleep(2)  # Brief pause
         return await self.start_server(server_id)
-    
+
     async def scale_server(
         self,
         server_id: str,
@@ -322,8 +329,10 @@ class ControlPlaneOrchestrator:
         max_instances: Optional[int] = None,
     ) -> ServerInfo:
         """Scale a serverless endpoint."""
-        logger.info(f"Scaling server {server_id}: min={min_instances}, max={max_instances}")
-        
+        logger.info(
+            f"Scaling server {server_id}: min={min_instances}, max={max_instances}"
+        )
+
         try:
             # Scale server
             server = await self.server_manager.scale_server(
@@ -331,7 +340,7 @@ class ControlPlaneOrchestrator:
                 min_instances=min_instances,
                 max_instances=max_instances,
             )
-            
+
             # Notify
             await self.notifier.notify_server_event(
                 server_id=server_id,
@@ -341,13 +350,13 @@ class ControlPlaneOrchestrator:
                     "max_instances": max_instances,
                 },
             )
-            
+
             return server
-            
+
         except Exception as e:
             logger.error(f"Failed to scale server {server_id}: {e}")
             raise
-    
+
     def record_request(
         self,
         server_id: str,
@@ -363,13 +372,13 @@ class ControlPlaneOrchestrator:
             success=success,
             metadata={"endpoint": endpoint} if endpoint else None,
         )
-        
+
         # Update status tracker
         self.status_tracker.record_request(server_id, success)
-        
+
         # Update auto-shutdown
         self.auto_shutdown.record_activity(server_id)
-    
+
     async def get_dashboard_data(self) -> Dict[str, Any]:
         """Get comprehensive dashboard data."""
         # Get all data sources
@@ -378,11 +387,11 @@ class ControlPlaneOrchestrator:
         deployments = self.status_tracker.get_all_deployments()
         auto_shutdown_stats = self.auto_shutdown.get_statistics()
         notification_stats = self.notifier.get_statistics()
-        
+
         # Get current resource usage
         gpu_info = await self.resource_monitor.get_gpu_info()
         system_info = await self.resource_monitor.get_system_resources()
-        
+
         return {
             "timestamp": datetime.utcnow().isoformat(),
             "servers": [
@@ -393,7 +402,9 @@ class ControlPlaneOrchestrator:
                     "endpoint_url": server.endpoint_url,
                     "cost_per_hour": server.cost_per_hour,
                     "total_cost": server.total_cost,
-                    "created_at": server.created_at.isoformat() if server.created_at else None,
+                    "created_at": (
+                        server.created_at.isoformat() if server.created_at else None
+                    ),
                 }
                 for server in servers
             ],
@@ -422,76 +433,80 @@ class ControlPlaneOrchestrator:
             "notifications": notification_stats,
             "status_summary": self.status_tracker.get_summary(),
         }
-    
+
     async def _metrics_broadcast_loop(self):
         """Periodically broadcast metrics."""
         while self.is_running:
             try:
                 # Get current metrics
                 servers = await self.server_manager.list_servers()
-                
+
                 for server in servers:
                     if server.state == ServerState.RUNNING:
                         metrics = self.metrics_collector.get_server_metrics(server.id)
-                        
-                        await self.notifier.notify_metrics({
-                            "server_id": server.id,
-                            "metrics": metrics.model_dump(),
-                        })
-                
+
+                        await self.notifier.notify_metrics(
+                            {
+                                "server_id": server.id,
+                                "metrics": metrics.model_dump(),
+                            }
+                        )
+
                 await asyncio.sleep(5)  # Broadcast every 5 seconds
-                
+
             except Exception as e:
                 logger.error(f"Metrics broadcast error: {e}")
                 await asyncio.sleep(5)
-    
+
     async def _status_update_loop(self):
         """Periodically update and broadcast status."""
         while self.is_running:
             try:
                 # Update server statuses
                 servers = await self.server_manager.list_servers()
-                
+
                 for server in servers:
                     # Get latest status from RunPod
-                    updated_server = await self.server_manager.get_server_status(server.id)
-                    
+                    updated_server = await self.server_manager.get_server_status(
+                        server.id
+                    )
+
                     # Update tracker if state changed
                     if updated_server.state != server.state:
                         self.status_tracker.update_server_state(
                             server.id,
                             updated_server.state,
                         )
-                
+
                 # Broadcast system status
                 status_summary = self.status_tracker.get_summary()
                 await self.notifier.send_system_status(status_summary)
-                
+
                 await asyncio.sleep(30)  # Update every 30 seconds
-                
+
             except Exception as e:
                 logger.error(f"Status update error: {e}")
                 await asyncio.sleep(30)
-    
+
     async def _cost_tracking_loop(self):
         """Track and update costs."""
         while self.is_running:
             try:
                 # Update costs for running servers
                 servers = await self.server_manager.list_servers()
-                
+
                 for server in servers:
                     if server.state == ServerState.RUNNING and server.started_at:
                         # Calculate current session cost
                         runtime = datetime.utcnow() - server.started_at
                         hours = runtime.total_seconds() / 3600
                         session_cost = hours * server.cost_per_hour
-                        
+
                         # Record cost
                         self.metrics_collector.record_cost(server.id, session_cost)
-                
+
                 await asyncio.sleep(60)  # Update every minute
-                
+
             except Exception as e:
                 logger.error(f"Cost tracking error: {e}")
                 await asyncio.sleep(60)

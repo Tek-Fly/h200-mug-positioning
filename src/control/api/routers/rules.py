@@ -1,12 +1,15 @@
 """Rules management API endpoints."""
 
+# Standard library imports
 import logging
 from datetime import datetime
 from typing import List, Optional
 from uuid import uuid4
 
+# Third-party imports
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+# First-party imports
 from src.control.api.middleware.auth import get_current_user, require_permission
 from src.control.api.models.rules import (
     NaturalLanguageRuleRequest,
@@ -31,7 +34,7 @@ async def get_rule_engine(request: Request) -> RuleEngine:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Database not initialized",
         )
-    
+
     rule_engine = RuleEngine(db=request.app.state.mongodb)
     await rule_engine.initialize()
     return rule_engine
@@ -45,7 +48,7 @@ async def create_rule_from_natural_language(
 ) -> NaturalLanguageRuleResponse:
     """
     Create or update a positioning rule from natural language description.
-    
+
     Examples:
     - "The mug should be centered on the coaster"
     - "Keep at least 2 inches between mugs"
@@ -54,11 +57,11 @@ async def create_rule_from_natural_language(
     try:
         rule_engine = await get_rule_engine(request)
         parser = NaturalLanguageParser()
-        
+
         # Parse natural language
         logger.info(f"Parsing natural language rule: {nl_request.text}")
         parsed_rule = parser.parse(nl_request.text, context=nl_request.context)
-        
+
         # Create rule object
         rule = Rule(
             id=str(uuid4()),
@@ -77,30 +80,30 @@ async def create_rule_from_natural_language(
                 "parser_confidence": parsed_rule.get("confidence", 0.8),
             },
         )
-        
+
         # Store rule
         await rule_engine.create_rule(rule.model_dump())
-        
+
         # Generate interpretation
         interpretation = f"Created {rule.type} rule: {rule.name}"
         if rule.conditions:
             interpretation += f" with {len(rule.conditions)} condition(s)"
-        
+
         # Check for warnings
         warnings = []
         if parsed_rule.get("confidence", 1.0) < 0.7:
             warnings.append("Low confidence in interpretation, please verify the rule")
-        
+
         if not rule.conditions:
             warnings.append("No specific conditions were identified")
-        
+
         return NaturalLanguageRuleResponse(
             rule=rule,
             interpretation=interpretation,
             confidence=parsed_rule.get("confidence", 0.8),
             warnings=warnings,
         )
-        
+
     except Exception as e:
         logger.error(f"Error creating rule from natural language: {e}", exc_info=True)
         raise HTTPException(
@@ -119,22 +122,22 @@ async def list_rules(
     """List all positioning rules."""
     try:
         rule_engine = await get_rule_engine(request)
-        
+
         # Build filter
         filter_dict = {}
         if enabled_only:
             filter_dict["enabled"] = True
         if rule_type:
             filter_dict["type"] = rule_type
-        
+
         # Get rules
         rules_data = await rule_engine.list_rules(filter_dict)
-        
+
         # Convert to models
         rules = [Rule(**rule_data) for rule_data in rules_data]
-        
+
         return rules
-        
+
     except Exception as e:
         logger.error(f"Error listing rules: {e}", exc_info=True)
         raise HTTPException(
@@ -153,15 +156,15 @@ async def get_rule(
     try:
         rule_engine = await get_rule_engine(request)
         rule_data = await rule_engine.get_rule(rule_id)
-        
+
         if not rule_data:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Rule {rule_id} not found",
             )
-        
+
         return Rule(**rule_data)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -181,7 +184,7 @@ async def create_rule(
     """Create a new positioning rule."""
     try:
         rule_engine = await get_rule_engine(request)
-        
+
         # Create rule
         rule = Rule(
             id=str(uuid4()),
@@ -199,12 +202,12 @@ async def create_rule(
                 "created_by": current_user,
             },
         )
-        
+
         # Store rule
         await rule_engine.create_rule(rule.model_dump())
-        
+
         return rule
-        
+
     except Exception as e:
         logger.error(f"Error creating rule: {e}", exc_info=True)
         raise HTTPException(
@@ -223,7 +226,7 @@ async def update_rule(
     """Update an existing rule."""
     try:
         rule_engine = await get_rule_engine(request)
-        
+
         # Get existing rule
         existing_rule = await rule_engine.get_rule(rule_id)
         if not existing_rule:
@@ -231,19 +234,19 @@ async def update_rule(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Rule {rule_id} not found",
             )
-        
+
         # Build update
         update_data = update_request.model_dump(exclude_unset=True)
         update_data["updated_at"] = datetime.utcnow()
-        
+
         if "metadata" in update_data:
             update_data["metadata"]["updated_by"] = current_user
-        
+
         # Update rule
         updated_rule = await rule_engine.update_rule(rule_id, update_data)
-        
+
         return Rule(**updated_rule)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -263,7 +266,7 @@ async def delete_rule(
     """Delete a rule."""
     try:
         rule_engine = await get_rule_engine(request)
-        
+
         # Check if rule exists
         existing_rule = await rule_engine.get_rule(rule_id)
         if not existing_rule:
@@ -271,15 +274,15 @@ async def delete_rule(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Rule {rule_id} not found",
             )
-        
+
         # Delete rule
         await rule_engine.delete_rule(rule_id)
-        
+
         return {
             "success": True,
             "message": f"Rule {rule_id} deleted successfully",
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -299,7 +302,7 @@ async def evaluate_rules(
     """Evaluate rules against provided data."""
     try:
         rule_engine = await get_rule_engine(request)
-        
+
         # Get rules to evaluate
         if evaluation_request.rule_ids:
             rules = []
@@ -309,34 +312,38 @@ async def evaluate_rules(
                     rules.append(rule)
         else:
             # Get all rules
-            filter_dict = {} if evaluation_request.include_disabled else {"enabled": True}
+            filter_dict = (
+                {} if evaluation_request.include_disabled else {"enabled": True}
+            )
             rules = await rule_engine.list_rules(filter_dict)
-        
+
         # Evaluate each rule
         results = []
         matched_count = 0
-        
+
         for rule in rules:
-            result = await rule_engine.evaluate_rule(rule["id"], evaluation_request.data)
+            result = await rule_engine.evaluate_rule(
+                rule["id"], evaluation_request.data
+            )
             results.append(result)
-            
+
             if result.matched:
                 matched_count += 1
-        
+
         # Build summary
         summary = {
             "total_rules": len(rules),
             "matched_rules": matched_count,
             "match_rate": matched_count / len(rules) if rules else 0,
         }
-        
+
         return RuleEvaluationResponse(
             evaluated_count=len(rules),
             matched_count=matched_count,
             results=results,
             summary=summary,
         )
-        
+
     except Exception as e:
         logger.error(f"Error evaluating rules: {e}", exc_info=True)
         raise HTTPException(

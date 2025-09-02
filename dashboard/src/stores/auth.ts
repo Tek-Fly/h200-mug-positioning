@@ -3,6 +3,7 @@ import { ref, computed, readonly } from 'vue'
 import { apiClient } from '@/api/client'
 import { wsClient } from '@/api/websocket'
 import { useNotificationStore } from './notifications'
+import { logError } from '@/utils/logger'
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<any>(null)
@@ -68,7 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
       })
       
     } catch (error) {
-      console.error('Logout error:', error)
+      logError('Logout error', error, 'AuthStore')
     }
   }
 
@@ -92,7 +93,7 @@ export const useAuthStore = defineStore('auth', () => {
         }
       }
     } catch (error) {
-      console.error('Auth initialization error:', error)
+      logError('Auth initialization error', error, 'AuthStore')
     } finally {
       initialized.value = true
     }

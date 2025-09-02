@@ -5,80 +5,81 @@ Implements the individual tools exposed by the MCP server for
 mug positioning analysis and control.
 """
 
-import time
+# Standard library imports
+import asyncio
 import base64
 import io
+import time
 import uuid
-from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
-import asyncio
+from typing import Any, Dict, List, Optional, Tuple
 
+# Third-party imports
+import numpy as np
 import structlog
 from PIL import Image
-import numpy as np
 
-from src.core.analyzer import ImageAnalyzer, AnalysisResult
-from src.core.rules.engine import RuleEngine
+# First-party imports
+from src.core.analyzer import AnalysisResult, ImageAnalyzer
 from src.core.positioning import (
     MugPositioningEngine,
     PositioningResult,
-    PositioningStrategy
+    PositioningStrategy,
 )
+from src.core.rules.engine import RuleEngine
 from src.database.mongodb import get_mongodb_client
 from src.database.redis_client import get_redis_client
 
+# Local imports
 from .models import (
-    MCPToolDefinition,
-    MCPToolParameter,
-    MCPToolType,
+    MCPError,
     MCPRequest,
     MCPResponse,
+    MCPToolDefinition,
+    MCPToolParameter,
     MCPToolResult,
-    MCPError
+    MCPToolType,
 )
-
 
 logger = structlog.get_logger(__name__)
 
 
 class BaseMCPTool:
     """Base class for MCP tools."""
-    
+
     def __init__(
         self,
         name: str,
         description: str,
-        authenticator: Optional[Any] = None  # MCPAuthenticator type
+        authenticator: Optional[Any] = None,  # MCPAuthenticator type
     ):
         self.name = name
         self.description = description
         self.authenticator = authenticator
         self._initialized = False
-    
+
     async def initialize(self):
         """Initialize the tool."""
         if self._initialized:
             return
-        
+
         await self._setup()
         self._initialized = True
-    
+
     async def _setup(self):
         """Override in subclasses for specific setup."""
         pass
-    
+
     def get_definition(self) -> MCPToolDefinition:
         """Get tool definition."""
         raise NotImplementedError
-    
+
     async def execute(
-        self,
-        request: MCPRequest,
-        auth_info: Optional[Dict[str, Any]] = None
+        self, request: MCPRequest, auth_info: Optional[Dict[str, Any]] = None
     ) -> MCPResponse:
         """Execute the tool."""
         raise NotImplementedError
-    
+
     def _create_response(
         self,
         request_id: str,
@@ -86,7 +87,7 @@ class BaseMCPTool:
         data: Optional[Dict[str, Any]] = None,
         error: Optional[MCPError] = None,
         execution_time_ms: float = 0,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> MCPResponse:
         """Create standardized response."""
         return MCPResponse(
@@ -97,32 +98,32 @@ class BaseMCPTool:
                 data=data,
                 error=error,
                 execution_time_ms=execution_time_ms,
-                metadata=metadata
-            )
+                metadata=metadata,
+            ),
         )
 
 
 class AnalyzeImageTool(BaseMCPTool):
     """Tool for analyzing images for mug positioning."""
-    
+
     def __init__(
         self,
         analyzer: Optional[ImageAnalyzer] = None,
-        authenticator: Optional[Any] = None  # MCPAuthenticator type
+        authenticator: Optional[Any] = None,  # MCPAuthenticator type
     ):
         super().__init__(
             name="analyze_image",
             description="Analyze an image to detect mugs and suggest optimal positions",
-            authenticator=authenticator
+            authenticator=authenticator,
         )
         self.analyzer = analyzer
-    
+
     async def _setup(self):
         """Initialize analyzer if not provided."""
         if not self.analyzer:
             self.analyzer = ImageAnalyzer()
             await self.analyzer.initialize()
-    
+
     def get_definition(self) -> MCPToolDefinition:
         """Get tool definition."""
         return MCPToolDefinition(
@@ -134,7 +135,7 @@ class AnalyzeImageTool(BaseMCPTool):
                     name="image",
                     type="string",
                     description="Base64-encoded image data or image URL",
-                    required=True
+                    required=True,
                 ),
                 MCPToolParameter(
                     name="image_format",
@@ -142,29 +143,29 @@ class AnalyzeImageTool(BaseMCPTool):
                     description="Image format (jpeg, png, webp)",
                     required=False,
                     default="jpeg",
-                    enum=["jpeg", "png", "webp"]
+                    enum=["jpeg", "png", "webp"],
                 ),
                 MCPToolParameter(
                     name="apply_rules",
                     type="boolean",
                     description="Whether to apply natural language rules",
                     required=False,
-                    default=True
+                    default=True,
                 ),
                 MCPToolParameter(
                     name="return_embeddings",
                     type="boolean",
                     description="Whether to return CLIP embeddings",
                     required=False,
-                    default=False
+                    default=False,
                 ),
                 MCPToolParameter(
                     name="confidence_threshold",
                     type="number",
                     description="Minimum confidence for detections (0-1)",
                     required=False,
-                    default=0.5
-                )
+                    default=0.5,
+                ),
             ],
             returns={
                 "type": "object",
@@ -178,9 +179,9 @@ class AnalyzeImageTool(BaseMCPTool):
                                 "class": {"type": "string"},
                                 "confidence": {"type": "number"},
                                 "bbox": {"type": "array", "items": {"type": "number"}},
-                                "position": {"type": "object"}
-                            }
-                        }
+                                "position": {"type": "object"},
+                            },
+                        },
                     },
                     "suggestions": {
                         "type": "array",
@@ -191,26 +192,24 @@ class AnalyzeImageTool(BaseMCPTool):
                                 "current_position": {"type": "object"},
                                 "suggested_position": {"type": "object"},
                                 "reason": {"type": "string"},
-                                "confidence": {"type": "number"}
-                            }
-                        }
+                                "confidence": {"type": "number"},
+                            },
+                        },
                     },
                     "embeddings": {"type": "array", "optional": True},
-                    "processing_time_ms": {"type": "number"}
-                }
+                    "processing_time_ms": {"type": "number"},
+                },
             },
             rate_limit={"requests_per_minute": 30},
-            async_timeout=30
+            async_timeout=30,
         )
-    
+
     async def execute(
-        self,
-        request: MCPRequest,
-        auth_info: Optional[Dict[str, Any]] = None
+        self, request: MCPRequest, auth_info: Optional[Dict[str, Any]] = None
     ) -> MCPResponse:
         """Execute image analysis."""
         start_time = time.time()
-        
+
         try:
             # Extract parameters
             params = request.parameters
@@ -219,23 +218,22 @@ class AnalyzeImageTool(BaseMCPTool):
             apply_rules = params.get("apply_rules", True)
             return_embeddings = params.get("return_embeddings", False)
             confidence_threshold = params.get("confidence_threshold", 0.5)
-            
+
             if not image_data:
                 return self._create_response(
                     request.id,
                     success=False,
                     error=MCPError(
-                        code="MISSING_PARAMETER",
-                        message="Image data is required"
+                        code="MISSING_PARAMETER", message="Image data is required"
                     ),
-                    execution_time_ms=(time.time() - start_time) * 1000
+                    execution_time_ms=(time.time() - start_time) * 1000,
                 )
-            
+
             # Decode image
             if image_data.startswith("data:"):
                 # Remove data URL prefix
                 image_data = image_data.split(",")[1]
-            
+
             try:
                 image_bytes = base64.b64decode(image_data)
                 image = Image.open(io.BytesIO(image_bytes))
@@ -245,18 +243,18 @@ class AnalyzeImageTool(BaseMCPTool):
                     success=False,
                     error=MCPError(
                         code="INVALID_IMAGE",
-                        message=f"Failed to decode image: {str(e)}"
+                        message=f"Failed to decode image: {str(e)}",
                     ),
-                    execution_time_ms=(time.time() - start_time) * 1000
+                    execution_time_ms=(time.time() - start_time) * 1000,
                 )
-            
+
             # Analyze image
             result = await self.analyzer.analyze_image(
                 image,
                 apply_rules=apply_rules,
-                confidence_threshold=confidence_threshold
+                confidence_threshold=confidence_threshold,
             )
-            
+
             # Prepare response data
             response_data = {
                 "analysis_id": result.analysis_id,
@@ -267,22 +265,22 @@ class AnalyzeImageTool(BaseMCPTool):
                         "bbox": det["bbox"],
                         "position": {
                             "x": det["bbox"][0] + det["bbox"][2] / 2,
-                            "y": det["bbox"][1] + det["bbox"][3] / 2
-                        }
+                            "y": det["bbox"][1] + det["bbox"][3] / 2,
+                        },
                     }
                     for det in result.detections
                 ],
                 "suggestions": result.suggestions,
-                "processing_time_ms": result.processing_time_ms
+                "processing_time_ms": result.processing_time_ms,
             }
-            
-            if return_embeddings and hasattr(result, 'embeddings'):
+
+            if return_embeddings and hasattr(result, "embeddings"):
                 response_data["embeddings"] = result.embeddings.tolist()
-            
+
             # Store in database
             if auth_info:
                 response_data["client_id"] = auth_info.get("client_id")
-            
+
             return self._create_response(
                 request.id,
                 success=True,
@@ -291,44 +289,43 @@ class AnalyzeImageTool(BaseMCPTool):
                 metadata={
                     "image_size": list(image.size),
                     "format": image_format,
-                    "rules_applied": apply_rules
-                }
+                    "rules_applied": apply_rules,
+                },
             )
-            
+
         except Exception as e:
             logger.error("Image analysis failed", error=str(e), request_id=request.id)
             return self._create_response(
                 request.id,
                 success=False,
                 error=MCPError(
-                    code="ANALYSIS_ERROR",
-                    message=f"Analysis failed: {str(e)}"
+                    code="ANALYSIS_ERROR", message=f"Analysis failed: {str(e)}"
                 ),
-                execution_time_ms=(time.time() - start_time) * 1000
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
 
 class ApplyRulesTool(BaseMCPTool):
     """Tool for applying natural language rules to positioning."""
-    
+
     def __init__(
         self,
         rule_engine: Optional[RuleEngine] = None,
-        authenticator: Optional[Any] = None  # MCPAuthenticator type
+        authenticator: Optional[Any] = None,  # MCPAuthenticator type
     ):
         super().__init__(
             name="apply_rules",
             description="Apply natural language positioning rules",
-            authenticator=authenticator
+            authenticator=authenticator,
         )
         self.rule_engine = rule_engine
-    
+
     async def _setup(self):
         """Initialize rule engine if not provided."""
         if not self.rule_engine:
             self.rule_engine = RuleEngine()
             await self.rule_engine.initialize()
-    
+
     def get_definition(self) -> MCPToolDefinition:
         """Get tool definition."""
         return MCPToolDefinition(
@@ -340,29 +337,29 @@ class ApplyRulesTool(BaseMCPTool):
                     name="rule_text",
                     type="string",
                     description="Natural language rule to apply",
-                    required=True
+                    required=True,
                 ),
                 MCPToolParameter(
                     name="priority",
                     type="integer",
                     description="Rule priority (higher = more important)",
                     required=False,
-                    default=5
+                    default=5,
                 ),
                 MCPToolParameter(
                     name="tags",
                     type="array",
                     description="Tags for rule categorization",
                     required=False,
-                    default=[]
+                    default=[],
                 ),
                 MCPToolParameter(
                     name="validate_only",
                     type="boolean",
                     description="Only validate without saving",
                     required=False,
-                    default=False
-                )
+                    default=False,
+                ),
             ],
             returns={
                 "type": "object",
@@ -374,23 +371,21 @@ class ApplyRulesTool(BaseMCPTool):
                         "properties": {
                             "is_valid": {"type": "boolean"},
                             "issues": {"type": "array"},
-                            "warnings": {"type": "array"}
-                        }
+                            "warnings": {"type": "array"},
+                        },
                     },
-                    "saved": {"type": "boolean"}
-                }
+                    "saved": {"type": "boolean"},
+                },
             },
-            rate_limit={"requests_per_minute": 60}
+            rate_limit={"requests_per_minute": 60},
         )
-    
+
     async def execute(
-        self,
-        request: MCPRequest,
-        auth_info: Optional[Dict[str, Any]] = None
+        self, request: MCPRequest, auth_info: Optional[Dict[str, Any]] = None
     ) -> MCPResponse:
         """Execute rule application."""
         start_time = time.time()
-        
+
         try:
             # Extract parameters
             params = request.parameters
@@ -398,22 +393,21 @@ class ApplyRulesTool(BaseMCPTool):
             priority = params.get("priority", 5)
             tags = params.get("tags", [])
             validate_only = params.get("validate_only", False)
-            
+
             if not rule_text:
                 return self._create_response(
                     request.id,
                     success=False,
                     error=MCPError(
-                        code="MISSING_PARAMETER",
-                        message="Rule text is required"
+                        code="MISSING_PARAMETER", message="Rule text is required"
                     ),
-                    execution_time_ms=(time.time() - start_time) * 1000
+                    execution_time_ms=(time.time() - start_time) * 1000,
                 )
-            
+
             # Add or validate rule
             if validate_only:
                 validation_result = await self.rule_engine.validate_rule(rule_text)
-                
+
                 return self._create_response(
                     request.id,
                     success=True,
@@ -423,20 +417,20 @@ class ApplyRulesTool(BaseMCPTool):
                         "validation": {
                             "is_valid": validation_result.is_valid,
                             "issues": validation_result.issues,
-                            "warnings": validation_result.warnings
+                            "warnings": validation_result.warnings,
                         },
-                        "saved": False
+                        "saved": False,
                     },
-                    execution_time_ms=(time.time() - start_time) * 1000
+                    execution_time_ms=(time.time() - start_time) * 1000,
                 )
             else:
                 rule_result = await self.rule_engine.add_rule(
                     rule_text,
                     priority=priority,
                     tags=tags,
-                    created_by=auth_info.get("client_id") if auth_info else None
+                    created_by=auth_info.get("client_id") if auth_info else None,
                 )
-                
+
                 return self._create_response(
                     request.id,
                     success=True,
@@ -446,51 +440,47 @@ class ApplyRulesTool(BaseMCPTool):
                         "validation": {
                             "is_valid": rule_result.validation.is_valid,
                             "issues": rule_result.validation.issues,
-                            "warnings": rule_result.validation.warnings
+                            "warnings": rule_result.validation.warnings,
                         },
-                        "saved": True
+                        "saved": True,
                     },
                     execution_time_ms=(time.time() - start_time) * 1000,
-                    metadata={
-                        "priority": priority,
-                        "tags": tags
-                    }
+                    metadata={"priority": priority, "tags": tags},
                 )
-            
+
         except Exception as e:
             logger.error("Rule application failed", error=str(e), request_id=request.id)
             return self._create_response(
                 request.id,
                 success=False,
                 error=MCPError(
-                    code="RULE_ERROR",
-                    message=f"Rule processing failed: {str(e)}"
+                    code="RULE_ERROR", message=f"Rule processing failed: {str(e)}"
                 ),
-                execution_time_ms=(time.time() - start_time) * 1000
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
 
 class GetSuggestionsTool(BaseMCPTool):
     """Tool for getting positioning suggestions for a scene."""
-    
+
     def __init__(
         self,
         positioning_engine: Optional[MugPositioningEngine] = None,
-        authenticator: Optional[Any] = None  # MCPAuthenticator type
+        authenticator: Optional[Any] = None,  # MCPAuthenticator type
     ):
         super().__init__(
             name="get_suggestions",
             description="Get mug positioning suggestions based on scene analysis",
-            authenticator=authenticator
+            authenticator=authenticator,
         )
         self.positioning_engine = positioning_engine
-    
+
     async def _setup(self):
         """Initialize positioning engine if not provided."""
         if not self.positioning_engine:
             self.positioning_engine = MugPositioningEngine()
             await self.positioning_engine.initialize()
-    
+
     def get_definition(self) -> MCPToolDefinition:
         """Get tool definition."""
         return MCPToolDefinition(
@@ -502,7 +492,7 @@ class GetSuggestionsTool(BaseMCPTool):
                     name="scene_context",
                     type="object",
                     description="Scene context including detected objects",
-                    required=True
+                    required=True,
                 ),
                 MCPToolParameter(
                     name="strategy",
@@ -510,15 +500,15 @@ class GetSuggestionsTool(BaseMCPTool):
                     description="Positioning strategy to use",
                     required=False,
                     default="balanced",
-                    enum=["safety_first", "balanced", "efficiency", "aesthetic"]
+                    enum=["safety_first", "balanced", "efficiency", "aesthetic"],
                 ),
                 MCPToolParameter(
                     name="constraints",
                     type="object",
                     description="Additional positioning constraints",
                     required=False,
-                    default={}
-                )
+                    default={},
+                ),
             ],
             returns={
                 "type": "object",
@@ -534,125 +524,124 @@ class GetSuggestionsTool(BaseMCPTool):
                                 "reason": {"type": "string"},
                                 "confidence": {"type": "number"},
                                 "safety_score": {"type": "number"},
-                                "efficiency_score": {"type": "number"}
-                            }
-                        }
+                                "efficiency_score": {"type": "number"},
+                            },
+                        },
                     },
                     "overall_score": {"type": "number"},
-                    "applied_rules": {"type": "array"}
-                }
+                    "applied_rules": {"type": "array"},
+                },
             },
-            rate_limit={"requests_per_minute": 120}
+            rate_limit={"requests_per_minute": 120},
         )
-    
+
     async def execute(
-        self,
-        request: MCPRequest,
-        auth_info: Optional[Dict[str, Any]] = None
+        self, request: MCPRequest, auth_info: Optional[Dict[str, Any]] = None
     ) -> MCPResponse:
         """Execute suggestion generation."""
         start_time = time.time()
-        
+
         try:
             # Extract parameters
             params = request.parameters
             scene_context = params.get("scene_context")
             strategy_name = params.get("strategy", "balanced")
             constraints = params.get("constraints", {})
-            
+
             if not scene_context:
                 return self._create_response(
                     request.id,
                     success=False,
                     error=MCPError(
-                        code="MISSING_PARAMETER",
-                        message="Scene context is required"
+                        code="MISSING_PARAMETER", message="Scene context is required"
                     ),
-                    execution_time_ms=(time.time() - start_time) * 1000
+                    execution_time_ms=(time.time() - start_time) * 1000,
                 )
-            
+
             # Map strategy name to enum
             strategy_map = {
                 "safety_first": PositioningStrategy.SAFETY_FIRST,
                 "balanced": PositioningStrategy.BALANCED,
                 "efficiency": PositioningStrategy.EFFICIENCY,
-                "aesthetic": PositioningStrategy.AESTHETIC
+                "aesthetic": PositioningStrategy.AESTHETIC,
             }
             strategy = strategy_map.get(strategy_name, PositioningStrategy.BALANCED)
-            
+
             # Generate suggestions
             positioning_result = await self.positioning_engine.calculate_positions(
-                scene_context=scene_context,
-                strategy=strategy,
-                constraints=constraints
+                scene_context=scene_context, strategy=strategy, constraints=constraints
             )
-            
+
             # Format response
             suggestions = []
             for suggestion in positioning_result.suggestions:
-                suggestions.append({
-                    "mug_id": suggestion["mug_id"],
-                    "current_position": suggestion["current_position"],
-                    "suggested_position": suggestion["suggested_position"],
-                    "reason": suggestion["reason"],
-                    "confidence": suggestion["confidence"],
-                    "safety_score": suggestion.get("safety_score", 0),
-                    "efficiency_score": suggestion.get("efficiency_score", 0)
-                })
-            
+                suggestions.append(
+                    {
+                        "mug_id": suggestion["mug_id"],
+                        "current_position": suggestion["current_position"],
+                        "suggested_position": suggestion["suggested_position"],
+                        "reason": suggestion["reason"],
+                        "confidence": suggestion["confidence"],
+                        "safety_score": suggestion.get("safety_score", 0),
+                        "efficiency_score": suggestion.get("efficiency_score", 0),
+                    }
+                )
+
             return self._create_response(
                 request.id,
                 success=True,
                 data={
                     "suggestions": suggestions,
                     "overall_score": positioning_result.overall_score,
-                    "applied_rules": positioning_result.applied_rules
+                    "applied_rules": positioning_result.applied_rules,
                 },
                 execution_time_ms=(time.time() - start_time) * 1000,
                 metadata={
                     "strategy": strategy_name,
-                    "num_suggestions": len(suggestions)
-                }
+                    "num_suggestions": len(suggestions),
+                },
             )
-            
+
         except Exception as e:
-            logger.error("Suggestion generation failed", error=str(e), request_id=request.id)
+            logger.error(
+                "Suggestion generation failed", error=str(e), request_id=request.id
+            )
             return self._create_response(
                 request.id,
                 success=False,
                 error=MCPError(
                     code="SUGGESTION_ERROR",
-                    message=f"Failed to generate suggestions: {str(e)}"
+                    message=f"Failed to generate suggestions: {str(e)}",
                 ),
-                execution_time_ms=(time.time() - start_time) * 1000
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
 
 class UpdatePositioningTool(BaseMCPTool):
     """Tool for updating mug positions based on feedback."""
-    
+
     def __init__(
         self,
         positioning_engine: Optional[MugPositioningEngine] = None,
-        authenticator: Optional[Any] = None  # MCPAuthenticator type
+        authenticator: Optional[Any] = None,  # MCPAuthenticator type
     ):
         super().__init__(
             name="update_positioning",
             description="Update mug positioning based on user feedback",
-            authenticator=authenticator
+            authenticator=authenticator,
         )
         self.positioning_engine = positioning_engine
         self.mongodb_client = None
-    
+
     async def _setup(self):
         """Initialize dependencies."""
         if not self.positioning_engine:
             self.positioning_engine = MugPositioningEngine()
             await self.positioning_engine.initialize()
-        
+
         if not self.mongodb_client:
             self.mongodb_client = await get_mongodb_client()
-    
+
     def get_definition(self) -> MCPToolDefinition:
         """Get tool definition."""
         return MCPToolDefinition(
@@ -664,21 +653,21 @@ class UpdatePositioningTool(BaseMCPTool):
                     name="analysis_id",
                     type="string",
                     description="ID of the original analysis",
-                    required=True
+                    required=True,
                 ),
                 MCPToolParameter(
                     name="feedback",
                     type="object",
                     description="User feedback on positioning",
-                    required=True
+                    required=True,
                 ),
                 MCPToolParameter(
                     name="update_model",
                     type="boolean",
                     description="Whether to update the model with this feedback",
                     required=False,
-                    default=False
-                )
+                    default=False,
+                ),
             ],
             returns={
                 "type": "object",
@@ -686,74 +675,77 @@ class UpdatePositioningTool(BaseMCPTool):
                     "feedback_id": {"type": "string"},
                     "updated_positions": {"type": "array"},
                     "model_updated": {"type": "boolean"},
-                    "improvement_score": {"type": "number"}
-                }
+                    "improvement_score": {"type": "number"},
+                },
             },
-            rate_limit={"requests_per_minute": 30}
+            rate_limit={"requests_per_minute": 30},
         )
-    
+
     async def execute(
-        self,
-        request: MCPRequest,
-        auth_info: Optional[Dict[str, Any]] = None
+        self, request: MCPRequest, auth_info: Optional[Dict[str, Any]] = None
     ) -> MCPResponse:
         """Execute positioning update."""
         start_time = time.time()
-        
+
         try:
             # Extract parameters
             params = request.parameters
             analysis_id = params.get("analysis_id")
             feedback = params.get("feedback")
             update_model = params.get("update_model", False)
-            
+
             if not analysis_id or not feedback:
                 return self._create_response(
                     request.id,
                     success=False,
                     error=MCPError(
                         code="MISSING_PARAMETERS",
-                        message="Analysis ID and feedback are required"
+                        message="Analysis ID and feedback are required",
                     ),
-                    execution_time_ms=(time.time() - start_time) * 1000
+                    execution_time_ms=(time.time() - start_time) * 1000,
                 )
-            
+
             # Store feedback
             feedback_doc = {
                 "feedback_id": str(uuid.uuid4()),
                 "analysis_id": analysis_id,
                 "feedback": feedback,
                 "timestamp": datetime.utcnow(),
-                "client_id": auth_info.get("client_id") if auth_info else None
+                "client_id": auth_info.get("client_id") if auth_info else None,
             }
-            
+
             db = self.mongodb_client.h200_positioning
             await db.feedback.insert_one(feedback_doc)
-            
+
             # Process feedback
             updated_positions = await self.positioning_engine.process_feedback(
-                analysis_id=analysis_id,
-                feedback=feedback
+                analysis_id=analysis_id, feedback=feedback
             )
-            
+
             # Update model if requested
             model_updated = False
-            if update_model and auth_info and "model_training" in auth_info.get("scopes", []):
+            if (
+                update_model
+                and auth_info
+                and "model_training" in auth_info.get("scopes", [])
+            ):
                 # This would trigger a model update process
                 # For now, we'll just log it
                 logger.info(
                     "Model update requested",
                     analysis_id=analysis_id,
-                    client_id=auth_info.get("client_id")
+                    client_id=auth_info.get("client_id"),
                 )
                 model_updated = True
-            
+
             # Calculate improvement score
-            improvement_score = await self.positioning_engine.calculate_improvement_score(
-                original_positions=feedback.get("original_positions", []),
-                updated_positions=updated_positions
+            improvement_score = (
+                await self.positioning_engine.calculate_improvement_score(
+                    original_positions=feedback.get("original_positions", []),
+                    updated_positions=updated_positions,
+                )
             )
-            
+
             return self._create_response(
                 request.id,
                 success=True,
@@ -761,24 +753,24 @@ class UpdatePositioningTool(BaseMCPTool):
                     "feedback_id": feedback_doc["feedback_id"],
                     "updated_positions": updated_positions,
                     "model_updated": model_updated,
-                    "improvement_score": improvement_score
+                    "improvement_score": improvement_score,
                 },
                 execution_time_ms=(time.time() - start_time) * 1000,
-                metadata={
-                    "feedback_type": feedback.get("type", "general")
-                }
+                metadata={"feedback_type": feedback.get("type", "general")},
             )
-            
+
         except Exception as e:
-            logger.error("Positioning update failed", error=str(e), request_id=request.id)
+            logger.error(
+                "Positioning update failed", error=str(e), request_id=request.id
+            )
             return self._create_response(
                 request.id,
                 success=False,
                 error=MCPError(
                     code="UPDATE_ERROR",
-                    message=f"Failed to update positioning: {str(e)}"
+                    message=f"Failed to update positioning: {str(e)}",
                 ),
-                execution_time_ms=(time.time() - start_time) * 1000
+                execution_time_ms=(time.time() - start_time) * 1000,
             )
 
 
@@ -787,5 +779,5 @@ AVAILABLE_TOOLS = {
     "analyze_image": AnalyzeImageTool,
     "apply_rules": ApplyRulesTool,
     "get_suggestions": GetSuggestionsTool,
-    "update_positioning": UpdatePositioningTool
+    "update_positioning": UpdatePositioningTool,
 }

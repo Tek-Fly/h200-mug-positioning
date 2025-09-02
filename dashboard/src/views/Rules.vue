@@ -1,6 +1,13 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
+      <!-- Rule Edit Modal -->
+      <RuleEditModal
+        v-if="showEditModal"
+        :rule="selectedRule"
+        @close="showEditModal = false"
+        @updated="handleRuleUpdated"
+      />
       <!-- Header -->
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -187,6 +194,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import RuleCard from '@/components/rules/RuleCard.vue'
+import RuleEditModal from '@/components/rules/RuleEditModal.vue'
 import { apiClient } from '@/api/client'
 import { useNotificationStore } from '@/stores/notifications'
 import type { Rule } from '@/types/api'
@@ -195,6 +203,8 @@ const rules = ref<Rule[]>([])
 const loading = ref(false)
 const creating = ref(false)
 const ruleTypeFilter = ref('')
+const showEditModal = ref(false)
+const selectedRule = ref<Rule | null>(null)
 
 const newRule = reactive({
   text: '',
@@ -283,8 +293,15 @@ async function toggleRule(rule: Rule): Promise<void> {
 }
 
 function editRule(rule: Rule): void {
-  // TODO: Implement rule editing modal
-  notificationStore.info('Coming Soon', 'Rule editing will be available soon')
+  selectedRule.value = rule
+  showEditModal.value = true
+}
+
+function handleRuleUpdated(updatedRule: Rule): void {
+  const index = rules.value.findIndex(r => r.id === updatedRule.id)
+  if (index !== -1) {
+    rules.value[index] = updatedRule
+  }
 }
 
 async function deleteRule(rule: Rule): Promise<void> {

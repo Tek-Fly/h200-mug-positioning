@@ -94,6 +94,7 @@ import { reactive, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { CpuChipIcon } from '@heroicons/vue/24/outline'
 import { useAuthStore } from '@/stores/auth'
+import { logError } from '@/utils/logger'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -118,7 +119,7 @@ async function handleSubmit(): Promise<void> {
     
   } catch (error) {
     // Error is handled by the auth store
-    console.error('Login failed:', error)
+    logError('Login failed', error, 'Login')
   }
 }
 

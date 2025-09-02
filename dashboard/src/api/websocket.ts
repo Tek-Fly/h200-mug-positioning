@@ -5,6 +5,7 @@ import type {
   AlertMessage,
   ActivityMessage
 } from '@/types/api'
+import { logInfo, logError, logDebug, logWarn } from '@/utils/logger'
 
 export type WebSocketMessageType = 'metrics' | 'logs' | 'alerts' | 'activity'
 
@@ -50,7 +51,7 @@ export class WebSocketClient {
       this.ws = new WebSocket(wsUrl)
 
       this.ws.onopen = () => {
-        console.log('WebSocket connected')
+        logInfo('WebSocket connected', undefined, 'WebSocket')
         this.isConnecting = false
         this.reconnectAttempts = 0
         resolve()
@@ -61,12 +62,12 @@ export class WebSocketClient {
           const message: WebSocketMessage = JSON.parse(event.data)
           this.handleMessage(message)
         } catch (error) {
-          console.error('Error parsing WebSocket message:', error)
+          logError('Error parsing WebSocket message', error, 'WebSocket')
         }
       }
 
       this.ws.onclose = (event) => {
-        console.log('WebSocket disconnected:', event.code, event.reason)
+        logInfo('WebSocket disconnected', { code: event.code, reason: event.reason }, 'WebSocket')
         this.isConnecting = false
         this.ws = null
 
@@ -76,7 +77,7 @@ export class WebSocketClient {
       }
 
       this.ws.onerror = (error) => {
-        console.error('WebSocket error:', error)
+        logError('WebSocket error', error, 'WebSocket')
         this.isConnecting = false
         
         if (this.reconnectAttempts === 0) {
@@ -102,16 +103,16 @@ export class WebSocketClient {
 
   private scheduleReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('Max reconnection attempts reached')
+      logError('Max reconnection attempts reached', undefined, 'WebSocket')
       return
     }
 
     this.reconnectAttempts++
-    console.log(`Reconnecting in ${this.reconnectInterval}ms (attempt ${this.reconnectAttempts})`)
+    logInfo(`Reconnecting in ${this.reconnectInterval}ms (attempt ${this.reconnectAttempts})`, undefined, 'WebSocket')
 
     setTimeout(() => {
       this.connect().catch(error => {
-        console.error('Reconnection failed:', error)
+        logError('Reconnection failed', error, 'WebSocket')
       })
     }, this.reconnectInterval)
   }
@@ -119,7 +120,7 @@ export class WebSocketClient {
   private handleMessage(message: WebSocketMessage): void {
     // Handle connection messages
     if (message.type === 'connection' || message.type === 'subscription' || message.type === 'pong') {
-      console.log('WebSocket system message:', message)
+      logDebug('WebSocket system message', message, 'WebSocket')
       return
     }
 
@@ -130,7 +131,7 @@ export class WebSocketClient {
         try {
           callback(message)
         } catch (error) {
-          console.error('Error in WebSocket callback:', error)
+          logError('Error in WebSocket callback', error, 'WebSocket')
         }
       })
     }

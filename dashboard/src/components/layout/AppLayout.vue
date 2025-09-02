@@ -176,6 +176,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { useWebSocket } from '@/api/websocket'
+import { logError } from '@/utils/logger'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -207,7 +208,7 @@ onMounted(async () => {
     try {
       await connectWs()
     } catch (error) {
-      console.error('Failed to connect WebSocket:', error)
+      logError('Failed to connect WebSocket', error, 'AppLayout')
     }
   }
 })
