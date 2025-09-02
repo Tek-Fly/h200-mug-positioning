@@ -1,0 +1,78 @@
+# CRITICAL: NO SECRETS IN REPOSITORY EVER - STORAGE OPTIMIZED VERSION
+.env
+.env.*
+!.env.example
+*.key
+*.pem  
+*.json
+secrets/
+.secrets
+credentials*
+config.json
+
+# RunPod specific secrets
+runpod-config.json
+pod-credentials
+*.runpod
+runpod-api-key
+
+# VS Code Server GitHub device codes
+github-device-code
+vscode-device-auth
+device-authorization
+*.device-code
+
+# FlashBoot configuration secrets
+flashboot-config
+serverless-auth
+cold-start-config
+
+# Cloudflare R2 credentials - CRITICAL
+r2-credentials
+cloudflare-r2-key
+*.r2
+r2-access-key
+r2-secret-key
+
+# Redis configuration secrets - CRITICAL
+redis-credentials
+redis-password
+redis-config
+*.redis
+
+# Network volume backup keys
+s3-credentials
+backup-keys
+github-lfs-keys
+
+# Cost monitoring secrets
+prometheus-config
+monitoring-credentials
+
+# Development artifacts
+__pycache__/
+*.pyc
+.vscode/settings.json
+.idea/
+node_modules/
+logs/
+*.log
+build/
+dist/
+
+# Docker and containers
+docker-compose.override.yml
+.docker/
+*.dockerfile.local
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Google Cloud
+service-account-key.json
+gcp-*.json
+
+# Local testing
+test-images/
+test-results/
