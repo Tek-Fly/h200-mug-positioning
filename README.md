@@ -50,6 +50,32 @@ MongoDB Storage → Redis Caching → Templated.io Rendering → Final Design
 - **Tertiary**: GitHub LFS for model checkpoints
 - **Caching**: Redis L1 + H200 L2 dual-layer
 
+## 📚 Documentation
+
+### Quick Links
+- **[📖 Complete Documentation](./docs/README.md)** - Full documentation index
+- **[🚀 Quick Start Guide](./docs/user-guides/quick-start.md)** - Get up and running in minutes
+- **[🔧 API Reference](./docs/api/README.md)** - Complete API documentation
+- **[🎛️ Dashboard Guide](./docs/user-guides/dashboard-guide.md)** - Web interface tutorial
+- **[🛠️ Troubleshooting](./docs/operations/troubleshooting.md)** - Common issues and solutions
+
+### User Documentation
+- **[User Manual](./docs/user-guides/user-manual.md)** - Complete feature guide
+- **[Rules Management](./docs/user-guides/rules-management.md)** - Create and manage positioning rules
+- **[Configuration Reference](./docs/reference/configuration.md)** - All configuration options
+- **[Error Codes](./docs/reference/error-codes.md)** - API error reference
+
+### Developer Documentation  
+- **[Architecture Overview](./docs/developer-guides/architecture.md)** - System design and components
+- **[Development Setup](./docs/developer-guides/development.md)** - Local development environment
+- **[Deployment Guide](./docs/developer-guides/deployment.md)** - Production deployment
+- **[Contributing Guide](./docs/developer-guides/contributing.md)** - Development workflow
+
+### Operations Documentation
+- **[Performance Guide](./docs/operations/performance.md)** - Optimization and tuning
+- **[Monitoring & Alerts](./docs/operations/monitoring.md)** - System monitoring setup
+- **[Security Guide](./docs/operations/security.md)** - Security best practices
+
 ## API Endpoints
 
 - `POST /api/v1/analyze/with-feedback` - Image analysis with optional feedback
@@ -57,6 +83,8 @@ MongoDB Storage → Redis Caching → Templated.io Rendering → Final Design
 - `GET /api/v1/dashboard` - Complete dashboard data
 - `POST /api/v1/servers/{type}/control` - Server management
 - `WebSocket /ws/control-plane` - Real-time updates
+
+**Full API Documentation**: [📋 API Reference](./docs/api/endpoints.md)
 
 ## Development
 
@@ -69,9 +97,13 @@ MongoDB Storage → Redis Caching → Templated.io Rendering → Final Design
 
 ### Local Setup
 
+```bash
 pip install -r requirements-dev.txt
 pytest tests/
 docker-compose -f docker-compose.yml up
+```
+
+**Detailed Setup**: [🔧 Development Guide](./docs/developer-guides/development.md)
 
 ## Cost Optimization
 
@@ -86,6 +118,13 @@ docker-compose -f docker-compose.yml up
 - JWT-based authentication for API access
 - TLS encryption for all communications
 - Regular security scans with Docker Scout
+
+## Documentation
+
+- **📖 [COMPREHENSIVE USER MANUAL](./USER_MANUAL.md)** - Complete guide with copy-paste examples
+- **📚 [Full Documentation](./docs/README.md)** - Technical documentation
+- **🚀 [Quick Start Guide](./docs/user-guides/quick-start.md)** - Get started quickly
+- **🏗️ [API Reference](./docs/api/endpoints.md)** - Complete API documentation
 
 ## Support
 

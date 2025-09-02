@@ -1,0 +1,396 @@
+version: '3.9'
+
+x-common-variables: &common-variables
+  # MongoDB Atlas
+  MONGODB_ATLAS_URI: ${MONGODB_ATLAS_URI}
+  
+  # RunPod Configuration
+  RUNPOD_API_KEY: ${RUNPOD_API_KEY}
+  RUNPOD_SERVERLESS_ENDPOINT_ID: ${RUNPOD_SERVERLESS_ENDPOINT_ID}
+  RUNPOD_TIMED_POD_ID: ${RUNPOD_TIMED_POD_ID}
+  RUNPOD_NETWORK_VOLUME_ID: ${RUNPOD_NETWORK_VOLUME_ID}
+  
+  # Cloudflare R2
+  R2_ENDPOINT_URL: ${R2_ENDPOINT_URL}
+  R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+  R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+  R2_BUCKET_NAME: ${R2_BUCKET_NAME}
+  
+  # Redis Configuration
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
+  REDIS_DB: 0
+  REDIS_MAX_CONNECTIONS: 50
+  
+  # Google Cloud
+  GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+  GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-key.json
+  
+  # Security
+  JWT_SECRET: ${JWT_SECRET}
+  
+  # OpenAI
+  OPENAI_API_KEY: ${OPENAI_API_KEY}
+  
+  # Integration
+  WEBHOOK_URL: ${WEBHOOK_URL}
+  N8N_WEBHOOK_URL: ${N8N_WEBHOOK_URL}
+  TEMPLATED_API_KEY: ${TEMPLATED_API_KEY}
+
+services:
+  # Redis Cache Layer
+  redis:
+    image: redis:7-alpine
+    container_name: h200-redis
+    command: >
+      redis-server
+      --maxmemory 2gb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+      --appendfsync everysec
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - h200-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Timed GPU Service with Control Plane
+  h200-timed:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.timed
+      args:
+        BASE_IMAGE: ${DOCKER_USERNAME}/h200-mug-positioning:base-latest
+      cache_from:
+        - ${DOCKER_USERNAME}/h200-mug-positioning:base-latest
+        - ${DOCKER_USERNAME}/h200-mug-positioning:timed-latest
+    image: ${DOCKER_USERNAME}/h200-mug-positioning:timed-latest
+    container_name: h200-timed
+    environment:
+      <<: *common-variables
+      DEPLOYMENT_MODE: timed
+      ENABLE_CONTROL_PLANE: "true"
+      ENABLE_MCP: "true"
+      ENABLE_LANGCHAIN: "true"
+      ENABLE_MONITORING: "true"
+      ENABLE_AUTO_SHUTDOWN: "true"
+      IDLE_TIMEOUT_MINUTES: 10
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_WORKERS: 2
+    volumes:
+      - model-cache:/cache
+      - ./secrets:/secrets:ro
+      - h200-logs:/logs
+    ports:
+      - "8000:8000"  # Main API
+      - "8001:8001"  # MCP Server
+      - "8002:8002"  # Control Plane
+      - "9090:9090"  # Prometheus metrics
+    networks:
+      - h200-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Serverless Worker (for local testing)
+  h200-serverless:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.serverless
+      args:
+        BASE_IMAGE: ${DOCKER_USERNAME}/h200-mug-positioning:base-latest
+      cache_from:
+        - ${DOCKER_USERNAME}/h200-mug-positioning:base-latest
+        - ${DOCKER_USERNAME}/h200-mug-positioning:serverless-latest
+    image: ${DOCKER_USERNAME}/h200-mug-positioning:serverless-latest
+    container_name: h200-serverless
+    environment:
+      <<: *common-variables
+      DEPLOYMENT_MODE: serverless
+      FLASHBOOT_ENABLED: "true"
+      MODEL_CACHE_ENABLED: "true"
+    volumes:
+      - model-cache:/cache
+      - ./secrets:/secrets:ro
+    networks:
+      - h200-network
+    depends_on:
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    profiles:
+      - serverless
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: h200-nginx
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./configs/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./dashboard/dist:/usr/share/nginx/html:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - h200-network
+    depends_on:
+      - h200-timed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prometheus for monitoring
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: h200-prometheus
+    volumes:
+      - ./configs/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/monitoring/alert_rules.yml:/etc/prometheus/rules/alert_rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=10GB'
+    ports:
+      - "9091:9090"
+    networks:
+      - h200-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: h200-grafana
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./configs/monitoring/grafana:/etc/grafana/provisioning:ro
+      - ./configs/monitoring/grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_DISABLE_GRAVATAR=true
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+    ports:
+      - "3000:3000"
+    networks:
+      - h200-network
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # AlertManager for alert routing
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: h200-alertmanager
+    volumes:
+      - ./configs/monitoring/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+      - '--cluster.advertise-address=0.0.0.0:9093'
+    ports:
+      - "9093:9093"
+    networks:
+      - h200-network
+    environment:
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - WEBHOOK_TOKEN=${WEBHOOK_TOKEN:-}
+      - N8N_WEBHOOK_URL=${N8N_WEBHOOK_URL}
+      - TEMPLATED_API_KEY=${TEMPLATED_API_KEY}
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node Exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: h200-node-exporter
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.cpu'
+      - '--collector.meminfo'
+      - '--collector.loadavg'
+      - '--collector.diskstats'
+      - '--collector.filesystem'
+      - '--collector.netdev'
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - h200-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # cAdvisor for container metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: h200-cadvisor
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /cgroup:/cgroup:ro
+    ports:
+      - "8080:8080"
+    networks:
+      - h200-network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    command:
+      - '--housekeeping_interval=10s'
+      - '--docker_only=true'
+      - '--store_container_labels=false'
+
+  # NVIDIA DCGM Exporter for GPU metrics
+  nvidia-dcgm-exporter:
+    image: nvcr.io/nvidia/k8s/dcgm-exporter:3.1.8-3.1.5-ubuntu20.04
+    container_name: h200-gpu-exporter
+    environment:
+      - DCGM_EXPORTER_LISTEN=:9400
+      - DCGM_EXPORTER_KUBERNETES=false
+    ports:
+      - "9400:9400"
+    networks:
+      - h200-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu, utility]
+    restart: unless-stopped
+    profiles:
+      - monitoring
+      - gpu
+    
+  # Redis Exporter for Redis metrics
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: h200-redis-exporter
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    ports:
+      - "9121:9121"
+    networks:
+      - h200-network
+    depends_on:
+      - redis
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+  # Nginx Prometheus Exporter
+  nginx-prometheus-exporter:
+    image: nginx/nginx-prometheus-exporter:0.10.0
+    container_name: h200-nginx-exporter
+    command:
+      - '-nginx.scrape-uri=http://nginx:8080/nginx_status'
+      - '-web.listen-address=:9113'
+    ports:
+      - "9113:9113"
+    networks:
+      - h200-network
+    depends_on:
+      - nginx
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+networks:
+  h200-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  redis-data:
+    driver: local
+  model-cache:
+    driver: local
+  h200-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  alertmanager-data:
+    driver: local

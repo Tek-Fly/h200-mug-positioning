@@ -1,0 +1,103 @@
+# Base image for H200 Intelligent Mug Positioning System
+# Multi-stage build optimized for size and caching
+FROM nvidia/cuda:12.2.2-cudnn8-runtime-ubuntu22.04 AS base
+
+# Python version
+ARG PYTHON_VERSION=3.11
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    DEBIAN_FRONTEND=noninteractive \
+    TZ=UTC \
+    POETRY_VERSION=1.7.1 \
+    POETRY_HOME=/opt/poetry \
+    POETRY_VENV=/opt/poetry-venv \
+    POETRY_CACHE_DIR=/opt/.cache
+
+# Install system dependencies and Python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    gpg-agent \
+    curl \
+    git \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    libxml2-dev \
+    libxslt1-dev \
+    zlib1g-dev \
+    libgomp1 \
+    wget \
+    ca-certificates \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+    python${PYTHON_VERSION} \
+    python${PYTHON_VERSION}-dev \
+    python${PYTHON_VERSION}-distutils \
+    python3-pip \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python${PYTHON_VERSION} 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenCV dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    libglib2.0-0 \
+    libgl1-mesa-glx \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip and install base Python packages
+RUN python -m pip install --upgrade pip setuptools wheel
+
+# Create non-root user for security
+RUN groupadd -g 1000 h200user && \
+    useradd -m -u 1000 -g h200user h200user
+
+# Create necessary directories
+RUN mkdir -p /app /models /cache /logs /tmp/cache && \
+    chown -R h200user:h200user /app /models /cache /logs /tmp/cache
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY --chown=h200user:h200user requirements.txt requirements-dev.txt ./
+
+# Install Python dependencies as root for system-wide access
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Pre-download YOLO and CLIP models for caching
+RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')" && \
+    python -c "import clip; clip.load('ViT-B/32', device='cpu')" && \
+    mv /root/.cache/clip /tmp/cache/ && \
+    mv /root/.cache/torch /tmp/cache/ && \
+    chown -R h200user:h200user /tmp/cache
+
+# Switch to non-root user
+USER h200user
+
+# Set model cache directories
+ENV TORCH_HOME=/cache/torch \
+    CLIP_HOME=/cache/clip \
+    TRANSFORMERS_CACHE=/cache/transformers \
+    HF_HOME=/cache/huggingface
+
+# Copy pre-downloaded models to user cache
+RUN mkdir -p /cache/clip /cache/torch && \
+    cp -r /tmp/cache/clip/* /cache/clip/ 2>/dev/null || true && \
+    cp -r /tmp/cache/torch/* /cache/torch/ 2>/dev/null || true
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import torch; import clip; print('OK')" || exit 1
+
+# Default command
+CMD ["python", "--version"]

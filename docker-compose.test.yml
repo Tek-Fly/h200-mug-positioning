@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  # Test runner service
+  h200-test-runner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.test
+    volumes:
+      - .:/app
+      - /app/.venv  # Exclude virtual environment
+      - test-reports:/app/reports
+    environment:
+      - TESTING=true
+      - LOG_LEVEL=WARNING
+      - SKIP_EXTERNAL_TESTS=true
+      - MONGODB_ATLAS_URI=mongodb://mongo-test:27017/test_h200
+      - REDIS_HOST=redis-test
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=test_password
+      - PYTHONPATH=/app/src
+    depends_on:
+      mongo-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+    networks:
+      - test-network
+    command: ["python", "tests/test_runner.py", "--ci"]
+
+  # Test MongoDB instance
+  mongo-test:
+    image: mongo:7.0
+    environment:
+      - MONGO_INITDB_DATABASE=test_h200
+    ports:
+      - "27018:27017"  # Different port to avoid conflicts
+    volumes:
+      - mongo-test-data:/data/db
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Test Redis instance
+  redis-test:
+    image: redis:7.2-alpine
+    command: redis-server --requirepass test_password
+    ports:
+      - "6380:6379"  # Different port to avoid conflicts
+    volumes:
+      - redis-test-data:/data
+    networks:
+      - test-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "test_password", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Test report server (for viewing HTML reports)
+  test-reports-server:
+    image: nginx:alpine
+    ports:
+      - "8081:80"
+    volumes:
+      - test-reports:/usr/share/nginx/html:ro
+      - ./nginx-test.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - test-network
+    profiles:
+      - reports
+
+volumes:
+  test-reports:
+  mongo-test-data:
+  redis-test-data:
+
+networks:
+  test-network:
+    driver: bridge

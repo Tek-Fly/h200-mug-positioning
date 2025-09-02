@@ -1,0 +1,284 @@
+groups:
+  # Critical System Alerts
+  - name: h200_critical_alerts
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 30s
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "Service {{ $labels.job }} on {{ $labels.instance }} has been down for more than 30 seconds"
+
+      - alert: HighErrorRate
+        expr: h200:error_rate:5m > 0.1
+        for: 2m
+        labels:
+          severity: critical
+          category: performance
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes"
+
+      - alert: ExtremeHighLatency
+        expr: h200:p99_latency:5m > 5
+        for: 1m
+        labels:
+          severity: critical
+          category: performance
+        annotations:
+          summary: "Extremely high API latency"
+          description: "99th percentile latency is {{ $value }}s, exceeding 5s threshold"
+
+  # GPU Monitoring Alerts
+  - name: h200_gpu_alerts
+    rules:
+      - alert: GPUHighUtilization
+        expr: h200:gpu_utilization:mean1m > 95
+        for: 5m
+        labels:
+          severity: warning
+          category: gpu
+        annotations:
+          summary: "GPU utilization is very high"
+          description: "GPU utilization is {{ $value }}% for the last 5 minutes"
+
+      - alert: GPUMemoryHigh
+        expr: h200:gpu_memory_usage:ratio > 0.9
+        for: 3m
+        labels:
+          severity: warning
+          category: gpu
+        annotations:
+          summary: "GPU memory usage is high"
+          description: "GPU memory usage is {{ $value | humanizePercentage }} for the last 3 minutes"
+
+      - alert: GPUOverheating
+        expr: h200:gpu_temperature:max > 85
+        for: 2m
+        labels:
+          severity: critical
+          category: gpu
+        annotations:
+          summary: "GPU overheating detected"
+          description: "GPU temperature reached {{ $value }}°C, exceeding safe operating temperature"
+
+      - alert: GPUNotResponding
+        expr: absent(dcgm_gpu_utilization) or dcgm_gpu_utilization < 0
+        for: 1m
+        labels:
+          severity: critical
+          category: gpu
+        annotations:
+          summary: "GPU metrics not available"
+          description: "GPU monitoring metrics are not being reported, GPU may be unresponsive"
+
+  # Performance Alerts
+  - name: h200_performance_alerts
+    rules:
+      - alert: HighLatency
+        expr: h200:p95_latency:5m > 1
+        for: 5m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "High API latency detected"
+          description: "95th percentile latency is {{ $value }}s, exceeding 1s threshold"
+
+      - alert: LowThroughput
+        expr: h200:request_rate:5m < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Low request throughput"
+          description: "Request rate is {{ $value }}/sec, which is unusually low"
+
+      - alert: ColdStartIssues
+        expr: increase(h200_cold_starts_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "High number of cold starts"
+          description: "{{ $value }} cold starts in the last 5 minutes, indicating potential caching issues"
+
+  # System Resource Alerts
+  - name: h200_system_alerts
+    rules:
+      - alert: HighCPUUsage
+        expr: h200:cpu_usage:avg5m > 80
+        for: 5m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value }}% for the last 5 minutes"
+
+      - alert: HighMemoryUsage
+        expr: h200:memory_usage:ratio > 0.85
+        for: 3m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanizePercentage }} for the last 3 minutes"
+
+      - alert: DiskSpaceLow
+        expr: h200:disk_usage:ratio > 0.8
+        for: 5m
+        labels:
+          severity: warning
+          category: system
+        annotations:
+          summary: "Low disk space"
+          description: "Disk usage is {{ $value | humanizePercentage }}, approaching capacity limits"
+
+      - alert: RedisConnectionFailure
+        expr: redis_connected_clients < 1 or absent(redis_connected_clients)
+        for: 1m
+        labels:
+          severity: critical
+          category: system
+        annotations:
+          summary: "Redis connection issues"
+          description: "Redis appears to be disconnected or unavailable"
+
+  # Business Logic Alerts
+  - name: h200_business_alerts
+    rules:
+      - alert: LowAnalysisSuccessRate
+        expr: h200:successful_analyses:rate5m / (h200:successful_analyses:rate5m + h200:failed_analyses:rate5m) < 0.95
+        for: 10m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Low analysis success rate"
+          description: "Analysis success rate is {{ $value | humanizePercentage }} for the last 10 minutes"
+
+      - alert: LowCacheHitRate
+        expr: h200:cache_hit_ratio:5m < 0.8
+        for: 15m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Low cache hit rate"
+          description: "Cache hit rate is {{ $value | humanizePercentage }}, indicating potential caching issues"
+
+      - alert: NoAnalysesProcessed
+        expr: h200:successful_analyses:rate5m == 0 and h200:failed_analyses:rate5m == 0
+        for: 30m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "No analyses being processed"
+          description: "No image analyses have been processed for the last 30 minutes"
+
+  # Cost Monitoring Alerts
+  - name: h200_cost_alerts
+    rules:
+      - alert: HighCostRate
+        expr: h200:cost_per_minute:estimated > 5
+        for: 30m
+        labels:
+          severity: warning
+          category: cost
+        annotations:
+          summary: "High cost rate detected"
+          description: "Estimated cost rate is ${{ $value }}/minute for the last 30 minutes"
+
+      - alert: RunPodIdleTime
+        expr: time() - h200_last_request_timestamp > 600 and h200:request_rate:5m == 0
+        for: 5m
+        labels:
+          severity: info
+          category: cost
+        annotations:
+          summary: "RunPod instance has been idle"
+          description: "No requests processed for {{ $value }}s, consider auto-shutdown"
+
+      - alert: UnexpectedScaling
+        expr: increase(h200_scale_events_total[1h]) > 20
+        for: 15m
+        labels:
+          severity: warning
+          category: cost
+        annotations:
+          summary: "Frequent scaling events"
+          description: "{{ $value }} scaling events in the last hour may indicate cost optimization issues"
+
+  # Model Performance Alerts
+  - name: h200_model_alerts
+    rules:
+      - alert: ModelLoadFailure
+        expr: increase(h200_model_load_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          category: business
+        annotations:
+          summary: "Model loading failures"
+          description: "{{ $value }} model loading failures in the last 5 minutes"
+
+      - alert: SlowModelInference
+        expr: h200_model_inference_duration_seconds > 2
+        for: 2m
+        labels:
+          severity: warning
+          category: performance
+        annotations:
+          summary: "Slow model inference"
+          description: "Model inference taking {{ $value }}s, exceeding expected performance"
+
+      - alert: ModelAccuracyDrop
+        expr: h200_model_confidence_score < 0.7
+        for: 10m
+        labels:
+          severity: warning
+          category: business
+        annotations:
+          summary: "Model confidence is low"
+          description: "Average model confidence is {{ $value }}, indicating potential accuracy issues"
+
+  # Integration Alerts
+  - name: h200_integration_alerts
+    rules:
+      - alert: WebhookFailures
+        expr: increase(h200_webhook_failures_total[5m]) > 3
+        for: 2m
+        labels:
+          severity: warning
+          category: integration
+        annotations:
+          summary: "Webhook delivery failures"
+          description: "{{ $value }} webhook failures in the last 5 minutes"
+
+      - alert: N8NIntegrationDown
+        expr: h200_n8n_last_success_timestamp < time() - 3600
+        for: 15m
+        labels:
+          severity: warning
+          category: integration
+        annotations:
+          summary: "N8N integration issues"
+          description: "No successful N8N integration for over 1 hour"
+
+      - alert: TemplatedAPIFailures
+        expr: increase(h200_templated_api_failures_total[10m]) > 5
+        for: 5m
+        labels:
+          severity: warning
+          category: integration
+        annotations:
+          summary: "Templated API failures"
+          description: "{{ $value }} Templated API failures in the last 10 minutes"

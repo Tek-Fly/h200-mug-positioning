@@ -1,0 +1,185 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'h200-mug-positioning'
+    environment: 'production'
+
+rule_files:
+  - "/etc/prometheus/rules/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # H200 Timed Service - Main API and Control Plane
+  - job_name: 'h200-timed-api'
+    static_configs:
+      - targets: ['h200-timed:9090']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    scrape_timeout: 10s
+    honor_labels: true
+    params:
+      format: ['prometheus']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'h200-timed'
+      - target_label: service
+        replacement: 'h200-api'
+      - target_label: deployment
+        replacement: 'timed'
+
+  # H200 Serverless Service
+  - job_name: 'h200-serverless'
+    static_configs:
+      - targets: ['h200-serverless:9090']
+    scrape_interval: 10s
+    metrics_path: /metrics
+    scrape_timeout: 5s
+    honor_labels: true
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'h200-serverless'
+      - target_label: service
+        replacement: 'h200-serverless'
+      - target_label: deployment
+        replacement: 'serverless'
+
+  # Redis Monitoring
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'redis'
+
+  # NVIDIA GPU Metrics (requires nvidia-dcgm-exporter)
+  - job_name: 'gpu-metrics'
+    static_configs:
+      - targets: ['h200-timed:9400', 'h200-serverless:9400']
+    scrape_interval: 5s
+    metrics_path: /metrics
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: '([^:]+):\d+'
+        target_label: instance
+        replacement: '${1}'
+      - target_label: service
+        replacement: 'gpu-exporter'
+
+  # Node Exporter for System Metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    relabel_configs:
+      - target_label: service
+        replacement: 'node-exporter'
+
+  # Docker Container Metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'cadvisor'
+
+  # Nginx Metrics
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:9113']
+    scrape_interval: 15s
+    metrics_path: /metrics
+    relabel_configs:
+      - target_label: service
+        replacement: 'nginx'
+
+  # Application-specific custom metrics
+  - job_name: 'h200-custom-metrics'
+    static_configs:
+      - targets: ['h200-timed:8002']  # Control plane metrics endpoint
+    scrape_interval: 10s
+    metrics_path: /api/v1/metrics/prometheus
+    scrape_timeout: 10s
+    honor_labels: true
+    relabel_configs:
+      - target_label: service
+        replacement: 'h200-custom'
+      - target_label: component
+        replacement: 'control-plane'
+
+# Recording rules for pre-computed metrics
+recording_rules:
+  - name: h200_api_metrics
+    interval: 30s
+    rules:
+      - record: h200:request_duration_seconds:mean5m
+        expr: rate(h200_request_duration_seconds_sum[5m]) / rate(h200_request_duration_seconds_count[5m])
+      
+      - record: h200:request_rate:5m
+        expr: rate(h200_requests_total[5m])
+      
+      - record: h200:error_rate:5m
+        expr: rate(h200_requests_total{status=~"4..|5.."}[5m]) / rate(h200_requests_total[5m])
+      
+      - record: h200:p95_latency:5m
+        expr: histogram_quantile(0.95, rate(h200_request_duration_seconds_bucket[5m]))
+      
+      - record: h200:p99_latency:5m
+        expr: histogram_quantile(0.99, rate(h200_request_duration_seconds_bucket[5m]))
+
+  - name: h200_gpu_metrics
+    interval: 15s
+    rules:
+      - record: h200:gpu_utilization:mean1m
+        expr: avg_over_time(dcgm_gpu_utilization[1m])
+      
+      - record: h200:gpu_memory_usage:ratio
+        expr: dcgm_gpu_memory_used / dcgm_gpu_memory_total
+      
+      - record: h200:gpu_temperature:max
+        expr: max_over_time(dcgm_gpu_temperature[5m])
+
+  - name: h200_business_metrics
+    interval: 60s
+    rules:
+      - record: h200:successful_analyses:rate5m
+        expr: rate(h200_analyses_total{status="success"}[5m])
+      
+      - record: h200:failed_analyses:rate5m
+        expr: rate(h200_analyses_total{status=~"error|timeout"}[5m])
+      
+      - record: h200:cache_hit_ratio:5m
+        expr: rate(h200_cache_hits_total[5m]) / (rate(h200_cache_hits_total[5m]) + rate(h200_cache_misses_total[5m]))
+      
+      - record: h200:cost_per_minute:estimated
+        expr: h200:successful_analyses:rate5m * 60 * 0.02  # $0.02 per analysis estimate
+
+  - name: h200_system_metrics
+    interval: 30s
+    rules:
+      - record: h200:cpu_usage:avg5m
+        expr: 100 - (avg by (instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+      
+      - record: h200:memory_usage:ratio
+        expr: 1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)
+      
+      - record: h200:disk_usage:ratio
+        expr: 1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})

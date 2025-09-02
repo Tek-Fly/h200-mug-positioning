@@ -1,0 +1,241 @@
+# Timed GPU deployment with control plane for H200 Intelligent Mug Positioning System
+ARG BASE_IMAGE=h200-mug-positioning:base-latest
+FROM ${BASE_IMAGE} AS base
+
+FROM base AS builder
+
+# Switch to root for installation
+USER root
+
+# Copy all source code
+COPY --chown=h200user:h200user src/ /app/src/
+COPY --chown=h200user:h200user configs/ /app/configs/
+COPY --chown=h200user:h200user dashboard/ /app/dashboard/
+COPY --chown=h200user:h200user docker/preload_models.py /app/preload_models.py
+
+# Install additional dependencies for API server
+RUN pip install --no-cache-dir \
+    gunicorn==21.2.0 \
+    uvloop==0.19.0 \
+    httptools==0.6.1 \
+    python-multipart==0.0.6 \
+    prometheus-fastapi-instrumentator==6.1.0
+
+# Pre-compile Python files
+RUN python -m compileall -b /app/src && \
+    find /app/src -name "*.py" -delete
+
+# Switch back to non-root user
+USER h200user
+
+# Create the main application entry point
+RUN cat > /app/main.py << 'EOF'
+import os
+import sys
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from typing import Optional
+
+# Add src to path
+sys.path.insert(0, '/app')
+
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from prometheus_fastapi_instrumentator import Instrumentator
+
+# Import API routers (to be implemented)
+from src.control.api.routers import health, analysis, rules, cache, websocket
+from src.control.manager.server_manager import ServerManager
+from src.core.analyzer import H200ImageAnalyzer
+from src.database.mongodb import MongoDBClient
+from src.database.redis_client import RedisClient
+from src.database.r2_storage import R2Storage
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Global instances
+analyzer: Optional[H200ImageAnalyzer] = None
+mongodb: Optional[MongoDBClient] = None
+redis: Optional[RedisClient] = None
+r2: Optional[R2Storage] = None
+server_manager: Optional[ServerManager] = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifecycle"""
+    global analyzer, mongodb, redis, r2, server_manager
+    
+    try:
+        # Initialize database connections
+        logger.info("Initializing database connections...")
+        mongodb = MongoDBClient()
+        redis = RedisClient()
+        r2 = R2Storage()
+        
+        await mongodb.connect()
+        await redis.connect()
+        
+        # Initialize analyzer
+        logger.info("Initializing H200 Image Analyzer...")
+        analyzer = H200ImageAnalyzer(
+            mongodb_client=mongodb,
+            redis_client=redis,
+            r2_client=r2
+        )
+        
+        # Initialize server manager for auto-shutdown
+        logger.info("Initializing server manager...")
+        server_manager = ServerManager(
+            idle_timeout_minutes=10,
+            check_interval_seconds=60
+        )
+        await server_manager.start()
+        
+        logger.info("Application startup completed successfully")
+        
+        # Store instances in app state
+        app.state.analyzer = analyzer
+        app.state.mongodb = mongodb
+        app.state.redis = redis
+        app.state.r2 = r2
+        app.state.server_manager = server_manager
+        
+        yield
+        
+    except Exception as e:
+        logger.error(f"Startup failed: {e}")
+        raise
+    finally:
+        # Cleanup on shutdown
+        logger.info("Shutting down application...")
+        
+        if server_manager:
+            await server_manager.stop()
+        
+        if mongodb:
+            await mongodb.close()
+        
+        if redis:
+            await redis.close()
+        
+        logger.info("Application shutdown completed")
+
+# Create FastAPI application
+app = FastAPI(
+    title="H200 Intelligent Mug Positioning System",
+    description="GPU-accelerated image analysis for intelligent mug positioning",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Setup Prometheus metrics
+instrumentator = Instrumentator()
+instrumentator.instrument(app).expose(app)
+
+# Include API routers
+app.include_router(health.router, prefix="/api/v1/health", tags=["health"])
+app.include_router(analysis.router, prefix="/api/v1/analysis", tags=["analysis"])
+app.include_router(rules.router, prefix="/api/v1/rules", tags=["rules"])
+app.include_router(cache.router, prefix="/api/v1/cache", tags=["cache"])
+app.include_router(websocket.router, prefix="/ws", tags=["websocket"])
+
+# Mount static files for dashboard
+app.mount("/dashboard", StaticFiles(directory="/app/dashboard/dist", html=True), name="dashboard")
+
+# Root endpoint
+@app.get("/")
+async def root():
+    return {
+        "service": "H200 Intelligent Mug Positioning System",
+        "status": "operational",
+        "endpoints": {
+            "health": "/api/v1/health",
+            "analysis": "/api/v1/analysis",
+            "rules": "/api/v1/rules",
+            "cache": "/api/v1/cache",
+            "websocket": "/ws",
+            "dashboard": "/dashboard",
+            "metrics": "/metrics",
+            "docs": "/docs"
+        }
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Get configuration from environment
+    host = os.getenv("API_HOST", "0.0.0.0")
+    port = int(os.getenv("API_PORT", "8000"))
+    workers = int(os.getenv("API_WORKERS", "1"))
+    
+    # Run with uvicorn
+    uvicorn.run(
+        "main:app",
+        host=host,
+        port=port,
+        workers=workers,
+        loop="uvloop",
+        access_log=True,
+        log_level="info"
+    )
+EOF
+
+# Create startup script with health checks
+RUN cat > /app/start.sh << 'EOF'
+#!/bin/bash
+set -e
+
+echo "Starting H200 Timed GPU Service..."
+
+# Wait for Redis
+echo "Waiting for Redis..."
+while ! nc -z ${REDIS_HOST:-redis} ${REDIS_PORT:-6379}; do
+  sleep 1
+done
+echo "Redis is ready"
+
+# Preload models
+echo "Preloading models..."
+python /app/preload_models.py
+
+# Start the API server
+echo "Starting API server..."
+exec python /app/main.py
+EOF
+
+RUN chmod +x /app/start.sh
+
+# Environment variables for timed deployment
+ENV DEPLOYMENT_MODE=timed \
+    ENABLE_CONTROL_PLANE=true \
+    ENABLE_AUTO_SHUTDOWN=true \
+    IDLE_TIMEOUT_MINUTES=10 \
+    API_HOST=0.0.0.0 \
+    API_PORT=8000 \
+    API_WORKERS=1
+
+# Expose ports
+EXPOSE 8000 8001 8002 9090
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
+
+# Use the startup script
+CMD ["/app/start.sh"]
