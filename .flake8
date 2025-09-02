@@ -1,0 +1,127 @@
+# H200 Intelligent Mug Positioning System - Flake8 Configuration
+# Production-grade Python code style enforcement
+
+[flake8]
+# Maximum line length
+max-line-length = 120
+
+# Maximum complexity
+max-complexity = 10
+
+# Exclude paths
+exclude = 
+    .git,
+    __pycache__,
+    docs,
+    old,
+    build,
+    dist,
+    .eggs,
+    *.egg,
+    .tox,
+    .venv,
+    venv,
+    .mypy_cache,
+    .pytest_cache,
+    htmlcov,
+    dashboard,
+    node_modules,
+    migrations,
+    .github
+
+# Ignore specific errors
+ignore = 
+    # E203: whitespace before ':' (conflicts with black)
+    E203,
+    # W503: line break before binary operator (conflicts with black)
+    W503,
+    # E501: line too long (handled by max-line-length)
+    E501,
+    # D100: Missing docstring in public module
+    D100,
+    # D104: Missing docstring in public package
+    D104,
+    # D105: Missing docstring in magic method
+    D105,
+    # D107: Missing docstring in __init__
+    D107,
+    # B008: Do not perform function calls in argument defaults
+    B008,
+    # E266: Too many leading '#' for block comment
+    E266,
+    # C901: Function is too complex (handled by max-complexity)
+    C901
+
+# Per-file ignores
+per-file-ignores = 
+    # Test files can have longer lines and use assert
+    tests/*:E501,S101
+    # __init__.py files don't need docstrings
+    */__init__.py:D104,F401
+    # Scripts can have print statements
+    scripts/*:T201
+    # Examples can be less strict
+    examples/*:D103,E501
+
+# Enable flake8 plugins
+enable-extensions = 
+    # Naming conventions
+    N,
+    # Docstring conventions
+    D,
+    # Import order
+    I,
+    # Security issues
+    S,
+    # Type annotations
+    ANN,
+    # Comprehensions
+    C4,
+    # Print statements
+    T20,
+    # Debugging statements
+    T10,
+    # Bandit security
+    B,
+    # Bugbear
+    B9,
+    # Quotes
+    Q,
+    # RST docstrings
+    RST,
+    # Darglint docstring
+    DAR,
+    # Flake8 annotations
+    ANN
+
+# McCabe complexity
+mccabe-complexity = 10
+
+# Import order configuration
+import-order-style = google
+application-import-names = src
+
+# Docstring convention
+docstring-convention = google
+
+# Type annotation settings
+suppress-none-returning = True
+allow-untyped-defs = False
+
+# Quotes
+inline-quotes = double
+multiline-quotes = double
+docstring-quotes = double
+
+# Statistics
+statistics = True
+count = True
+
+# Output format
+format = %(path)s:%(row)d:%(col)d: %(code)s %(text)s
+
+# Show source code in output
+show-source = True
+
+# Benchmark
+benchmark = True

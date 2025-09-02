@@ -7,19 +7,24 @@ on:
 
 env:
   DOCKER_BUILDKIT: 1
+  REGISTRY: docker.io
+  IMAGE_NAME: h200-mug-positioning
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
       
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
         with:
           driver: cloud
           driver-opts: |
-            cloud-token=${{ secrets.DOCKER_BUILD_CLOUD_TOKEN }}
+            name=cloud-tekflydocker-tekflycloudbuilder
+          version: v0.26.1
       
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -27,27 +32,112 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
       
-      - name: Get version
-        id: version
-        run: echo "VERSION=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+      - name: Get version and metadata
+        id: meta
+        run: |
+          echo "VERSION=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "TIMESTAMP=$(date +%Y%m%d-%H%M%S)" >> $GITHUB_OUTPUT
+          echo "CACHE_TAG=${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:buildcache" >> $GITHUB_OUTPUT
       
-      - name: Build and push
+      # Build base image first
+      - name: Build and push base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:base-latest
+            ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:base-${{ steps.meta.outputs.VERSION }}
+          cache-from: type=registry,ref=${{ steps.meta.outputs.CACHE_TAG }}-base
+          cache-to: type=registry,ref=${{ steps.meta.outputs.CACHE_TAG }}-base,mode=max
+      
+      # Build serverless image
+      - name: Build and push serverless image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./docker/Dockerfile.serverless
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ${{ secrets.DOCKER_USERNAME }}/h200-mug-positioning:serverless-latest
-            ${{ secrets.DOCKER_USERNAME }}/h200-mug-positioning:serverless-${{ steps.version.outputs.VERSION }}
-          platforms: linux/amd64
-
+            ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:serverless-latest
+            ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:serverless-${{ steps.meta.outputs.VERSION }}
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:base-${{ steps.meta.outputs.VERSION }}
+          cache-from: type=registry,ref=${{ steps.meta.outputs.CACHE_TAG }}-serverless
+          cache-to: type=registry,ref=${{ steps.meta.outputs.CACHE_TAG }}-serverless,mode=max
+      
+      # Build timed image
+      - name: Build and push timed image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.timed
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:timed-latest
+            ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:timed-${{ steps.meta.outputs.VERSION }}
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:base-${{ steps.meta.outputs.VERSION }}
+          cache-from: type=registry,ref=${{ steps.meta.outputs.CACHE_TAG }}-timed
+          cache-to: type=registry,ref=${{ steps.meta.outputs.CACHE_TAG }}-timed,mode=max
+      
+      # Verify multi-arch images
+      - name: Verify multi-architecture images
+        run: |
+          for image in base serverless timed; do
+            echo "Verifying $image image..."
+            docker buildx imagetools inspect \
+              ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${image}-${{ steps.meta.outputs.VERSION }}
+          done
+      
+      # Deploy to RunPod
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install deployment dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
       - name: Deploy to RunPod
         env:
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          MONGODB_ATLAS_URI: ${{ secrets.MONGODB_ATLAS_URI }}
+          R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          REDIS_HOST: ${{ secrets.REDIS_HOST }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python scripts/deploy_to_runpod.py \
-            --serverless-image ${{ secrets.DOCKER_USERNAME }}/h200-mug-positioning:serverless-${{ steps.version.outputs.VERSION }} \
-            --timed-image ${{ secrets.DOCKER_USERNAME }}/h200-mug-positioning:timed-${{ steps.version.outputs.VERSION }} \
-            --enable-r2 \
-            --enable-redis
+          python scripts/deploy/deploy_to_runpod.py both \
+            --serverless-image ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:serverless-${{ steps.meta.outputs.VERSION }} \
+            --timed-image ${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:timed-${{ steps.meta.outputs.VERSION }} \
+            --gpu-type H100 \
+            --strategy recreate
+      
+      # Create deployment summary
+      - name: Create deployment summary
+        if: success()
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Images Built and Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "- Base: \`${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:base-${{ steps.meta.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Serverless: \`${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:serverless-${{ steps.meta.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Timed: \`${{ env.REGISTRY }}/${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:timed-${{ steps.meta.outputs.VERSION }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Platforms" >> $GITHUB_STEP_SUMMARY
+          echo "- linux/amd64" >> $GITHUB_STEP_SUMMARY
+          echo "- linux/arm64" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Successfully deployed to RunPod" >> $GITHUB_STEP_SUMMARY

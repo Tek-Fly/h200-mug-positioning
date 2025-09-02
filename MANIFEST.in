@@ -1,0 +1,64 @@
+# Include all package data
+include README.md
+include LICENSE
+include requirements.txt
+include requirements-dev.txt
+include .env.example
+
+# Include configuration files
+include pyproject.toml
+include .pylintrc
+include .flake8
+include .coveragerc
+include pytest.ini
+include tox.ini
+include Makefile
+
+# Include all source code
+recursive-include src *.py *.pyi
+recursive-include tests *.py
+
+# Include data files
+recursive-include src *.json *.yaml *.yml
+recursive-include configs *.json *.yaml *.yml *.ini *.conf
+
+# Include documentation
+recursive-include docs *.md *.rst *.txt
+recursive-include docs *.png *.jpg *.svg
+
+# Include Docker files
+include docker-compose.yml
+include docker-compose.production.yml
+include docker-compose.test.yml
+recursive-include docker *
+
+# Include scripts
+recursive-include scripts *.sh *.py
+
+# Include dashboard static files
+recursive-include dashboard/dist *
+
+# Exclude unnecessary files
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.swp
+global-exclude .DS_Store
+global-exclude __pycache__
+global-exclude .git
+global-exclude .gitignore
+global-exclude .dockerignore
+
+# Exclude development artifacts
+prune .tox
+prune .pytest_cache
+prune .mypy_cache
+prune htmlcov
+prune .coverage
+prune build
+prune dist
+prune *.egg-info
+
+# Exclude local environment
+prune venv
+prune .venv
+prune env
