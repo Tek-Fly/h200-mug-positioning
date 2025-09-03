@@ -2,6 +2,8 @@
 
 This document provides detailed information about all API endpoints in the H200 Intelligent Mug Positioning System.
 
+> **In Simple Terms**: This API lets you send pictures to our AI system, and it tells you where coffee mugs are located and if they're placed safely. Think of it like a smart assistant that looks at your desk and warns you if your coffee is too close to your laptop!
+
 ## Image Analysis Endpoints
 
 ### Analyze Image with Feedback
@@ -10,51 +12,73 @@ This document provides detailed information about all API endpoints in the H200 
 
 Analyzes an uploaded image to detect mugs and provide positioning feedback based on configured rules.
 
+**What it does**: You upload a photo, and the system finds all coffee mugs in it, then tells you if they're positioned safely or if they need to be moved.
+
+#### Example CURL Request
+
+```bash
+# For Timed Pod deployment
+POD_URL="http://your-pod-id-8000.proxy.runpod.net"
+JWT_TOKEN="your-jwt-token-here"
+
+curl -X POST ${POD_URL}/api/v1/analyze/with-feedback \
+  -H "Authorization: Bearer ${JWT_TOKEN}" \
+  -F "image=@coffee-mug.jpg" \
+  -F "include_feedback=true" \
+  -F "confidence_threshold=0.7"
+```
+
 #### Request
 
 **Content-Type**: `multipart/form-data`
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `image` | File | Yes | Image file (JPG, PNG, WebP) |
-| `include_feedback` | Boolean | No | Include positioning feedback (default: true) |
-| `rules_context` | String | No | Natural language rules context |
-| `calibration_mm_per_pixel` | Float | No | Calibration factor for measurements |
-| `confidence_threshold` | Float | No | Detection confidence threshold (default: 0.7) |
+| Parameter | Type | Required | Description | In Simple Terms |
+|-----------|------|----------|-------------|-----------------|
+| `image` | File | Yes | Image file (JPG, PNG, WebP) | The photo you want to analyze |
+| `include_feedback` | Boolean | No | Include positioning feedback (default: true) | Whether you want advice on better mug placement |
+| `rules_context` | String | No | Natural language rules context | Special rules like "keep mugs 6 inches from laptops" |
+| `calibration_mm_per_pixel` | Float | No | Calibration factor for measurements | Helps convert pixels to real-world distances |
+| `confidence_threshold` | Float | No | Detection confidence threshold (default: 0.7) | How sure the AI needs to be (0.7 = 70% sure) |
 
 #### Response
 
+**What you get back**: A detailed report about all mugs found, their positions, and safety recommendations.
+
 ```json
 {
-  "request_id": "550e8400-e29b-41d4-a716-446655440000",
-  "timestamp": "2025-09-02T10:30:00Z",
-  "processing_time_ms": 450.5,
-  "detections": [
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",  // Unique ID for this analysis
+  "timestamp": "2025-09-02T10:30:00Z",                   // When the analysis was done
+  "processing_time_ms": 450.5,                           // How long it took (milliseconds)
+  
+  "detections": [                                        // All mugs found in the image
     {
-      "id": "det_001",
-      "bbox": {
-        "top_left": {"x": 100, "y": 50},
-        "bottom_right": {"x": 200, "y": 150},
-        "confidence": 0.95
+      "id": "det_001",                                   // Unique ID for this mug
+      "bbox": {                                          // Where the mug is located
+        "top_left": {"x": 100, "y": 50},               // Top-left corner coordinates
+        "bottom_right": {"x": 200, "y": 150},          // Bottom-right corner coordinates
+        "confidence": 0.95                               // 95% sure this is a mug
       },
-      "attributes": {
+      "attributes": {                                    // What the mug looks like
         "color": "white",
         "size": "medium"
       }
     }
   ],
-  "positioning": {
-    "position": "slightly off-center",
-    "confidence": 0.87,
-    "offset_pixels": {"x": 15, "y": -5},
-    "offset_mm": {"x": 7.5, "y": -2.5},
-    "rule_violations": []
+  
+  "positioning": {                                       // How well the mug is positioned
+    "position": "slightly off-center",                  // Description of placement
+    "confidence": 0.87,                                  // 87% confidence in this assessment
+    "offset_pixels": {"x": 15, "y": -5},               // How far from ideal position (in pixels)
+    "offset_mm": {"x": 7.5, "y": -2.5},                // Same distance in millimeters
+    "rule_violations": []                                // Any safety rules broken
   },
+  
   "feedback": "Mug detected successfully. Position is good with minor offset.",
-  "suggestions": [
+  "suggestions": [                                       // What to do for better placement
     "Move mug left by 15 pixels to center perfectly"
   ],
-  "metadata": {
+  
+  "metadata": {                                          // Extra technical info
     "user_id": "user123",
     "image_size": [1920, 1080],
     "model_version": "yolov8n-1.0"
@@ -105,6 +129,20 @@ Submit feedback on the accuracy of an analysis result to improve future predicti
 **`POST /api/v1/rules/natural-language`**
 
 Creates positioning rules from natural language descriptions using LangChain processing.
+
+#### Example CURL Request
+
+```bash
+# Create a positioning rule from natural language
+curl -X POST ${POD_URL}/api/v1/rules/natural-language \
+  -H "Authorization: Bearer ${JWT_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "text": "The mug should be centered on the coaster with at least 1 inch clearance from edges",
+    "context": "coffee_shop_setup",
+    "auto_enable": true
+  }'
+```
 
 #### Request
 
@@ -365,7 +403,7 @@ Control server operations (start, stop, restart, scale).
     "id": "srv_123",
     "type": "serverless",
     "state": "running",
-    "endpoint": "https://api-123.runpod.ai",
+    "endpoint": "http://pod-123-8000.proxy.runpod.net",
     "health": "healthy",
     "created_at": "2025-09-02T10:00:00Z",
     "config": {...},
@@ -387,7 +425,7 @@ List all configured servers with their current status.
 
 **`POST /api/v1/servers/deploy`**
 
-Deploy a new server instance to RunPod.
+Deploy a new server instance to RunPod infrastructure.
 
 ### Get Server Metrics
 
@@ -407,7 +445,9 @@ Retrieve logs from a specific server.
 
 **`WS /ws/control-plane?token=YOUR_JWT_TOKEN`**
 
-Real-time updates for system monitoring and control.
+Real-time updates for system monitoring and control. When deployed on RunPod, use the pod proxy URL:
+
+**RunPod WebSocket URL**: `ws://[POD_ID]-8000.proxy.runpod.net/ws/control-plane?token=YOUR_JWT_TOKEN`
 
 #### Available Topics
 
@@ -461,11 +501,52 @@ Real-time updates for system monitoring and control.
 | 500 | Internal Server Error | Server error |
 | 503 | Service Unavailable | Service temporarily unavailable |
 
+## Serverless Endpoint Examples
+
+### Analyze Image (Serverless)
+
+For serverless deployments, use the RunPod serverless API:
+
+```bash
+# Set your endpoint ID and API key
+ENDPOINT_ID="your-endpoint-id"
+RUNPOD_API_KEY="your-runpod-api-key"
+
+# Option 1: Analyze with image URL
+curl -X POST https://api.runpod.ai/v2/${ENDPOINT_ID}/runsync \
+  -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "image_url": "https://example.com/coffee-mug.jpg",
+      "apply_rules": true,
+      "confidence_threshold": 0.7
+    }
+  }'
+
+# Option 2: Analyze with base64 image
+IMAGE_BASE64=$(base64 -i coffee-mug.jpg | tr -d '\n')
+curl -X POST https://api.runpod.ai/v2/${ENDPOINT_ID}/runsync \
+  -H "Authorization: Bearer ${RUNPOD_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"input\": {
+      \"image\": \"${IMAGE_BASE64}\",
+      \"apply_rules\": true
+    }
+  }"
+```
+
 ## Health Check
 
 **`GET /api/health`**
 
 Public endpoint for service health monitoring (no authentication required).
+
+```bash
+# Check service health (Timed Pod only)
+curl ${POD_URL}/api/health
+```
 
 ```json
 {
@@ -487,11 +568,12 @@ Public endpoint for service health monitoring (no authentication required).
 
 ## Performance Considerations
 
+- **Cold Start**: 500ms-2s with FlashBoot enabled on RunPod
 - **Image Size**: Recommend max 1920x1080 for optimal processing
 - **Batch Processing**: Use batch endpoints for multiple images
 - **Caching**: Results cached for 5 minutes by default
 - **Rate Limits**: Adjust request frequency based on limits
-- **GPU Memory**: Large images may require more GPU memory
+- **GPU Memory**: Large images may require more GPU memory on H200
 
 ## Security Notes
 
